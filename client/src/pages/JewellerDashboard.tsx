@@ -15,9 +15,10 @@ import { useAccount } from "@/hooks/useAccount";
 import { useSocket } from "@/hooks/useSocket";
 import { trpc } from "@/lib/trpc";
 import { categoryLabel } from "@shared/categories";
-import { Clock, Gem, ImagePlus, IndianRupee, User } from "lucide-react";
+import { CheckCircle2, Clock, Gem, ImagePlus, IndianRupee, User } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { Link } from "wouter";
 
 export const jewellerNav = [
   { href: "/jeweller", label: "Lead Feed" },
@@ -253,9 +254,10 @@ export default function JewellerDashboard() {
       ) : (
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {leads.map(lead => (
-            <div
+            <Link
               key={lead.id}
-              className="luxury-shadow flex flex-col overflow-hidden rounded-2xl border border-[#D4AF37]/15 bg-white"
+              href={`/jeweller/leads/${lead.id}`}
+              className="luxury-shadow group flex flex-col overflow-hidden rounded-2xl border border-[#D4AF37]/15 bg-white transition-transform duration-200 hover:-translate-y-1 hover:border-[#D4AF37]/40"
             >
               <div className="relative h-44 overflow-hidden bg-neutral-100">
                 {lead.imageUrl ? (
@@ -302,39 +304,40 @@ export default function JewellerDashboard() {
                   </p>
                 )}
 
-                {/* Scraped product details */}
+                {/* Scraped product details — enhanced card display */}
                 {(() => {
                   const scraped: ScrapedProduct | null = lead.scrapedDetails
                     ? (() => { try { return JSON.parse(lead.scrapedDetails); } catch { return null; } })()
                     : null;
                   if (!scraped) return null;
-                  const details: { label: string; value?: string }[] = [
-                    { label: "Metal", value: scraped.metalType },
-                    { label: "Gold", value: scraped.goldWeight },
-                    { label: "Diamond", value: scraped.diamondWeight },
-                    { label: "Stone", value: scraped.stoneType },
-                    { label: "Listed price", value: scraped.price ? `${scraped.currency ?? ""}${scraped.price}`.trim() : undefined },
-                  ].filter(d => d.value);
-                  if (details.length === 0 && !scraped.description) return null;
+                  const specs = [
+                    scraped.metalType && { label: "Metal", value: scraped.metalType },
+                    scraped.goldWeight && { label: "Gold", value: scraped.goldWeight },
+                    scraped.diamondWeight && { label: "Diamond", value: scraped.diamondWeight },
+                    scraped.stoneType && { label: "Stone", value: scraped.stoneType },
+                    scraped.price && {
+                      label: "Listed price",
+                      value: `${scraped.currency && scraped.currency !== "INR" ? scraped.currency + " " : "₹"}${scraped.price}`,
+                    },
+                  ].filter(Boolean) as { label: string; value: string }[];
+                  if (specs.length === 0 && !scraped.description) return null;
                   return (
-                    <div className="mt-3 rounded-lg border border-[#D4AF37]/25 bg-[#D4AF37]/5 p-3">
-                      <p className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#8a6d1c]">
-                        <Gem className="h-3 w-3" /> Extracted product details
+                    <div className="mt-3 rounded-xl border border-[#D4AF37]/30 bg-gradient-to-br from-[#D4AF37]/8 to-[#D4AF37]/3 p-3">
+                      <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">
+                        <Gem className="h-3 w-3" /> Extracted specs
                       </p>
-                      {details.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {details.map(d => (
-                            <span
-                              key={d.label}
-                              className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-700 shadow-sm"
-                            >
-                              <span className="text-[#8a6d1c]">{d.label}:</span> {d.value}
-                            </span>
+                      {specs.length > 0 && (
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                          {specs.map(s => (
+                            <div key={s.label}>
+                              <p className="text-[9px] font-semibold uppercase tracking-wider text-neutral-400">{s.label}</p>
+                              <p className="text-xs font-semibold text-[#1A1A1A]">{s.value}</p>
+                            </div>
                           ))}
                         </div>
                       )}
                       {scraped.description && (
-                        <p className="mt-1.5 line-clamp-2 text-[11px] leading-relaxed text-neutral-600">
+                        <p className="mt-2 line-clamp-2 border-t border-[#D4AF37]/20 pt-2 text-[11px] leading-relaxed text-neutral-600">
                           {scraped.description}
                         </p>
                       )}
@@ -344,24 +347,34 @@ export default function JewellerDashboard() {
 
                 <div className="mt-auto pt-4">
                   {lead.alreadyQuoted ? (
-                    <Button variant="outline" className="w-full" disabled>
-                      Quote submitted ✓
-                    </Button>
+                    <div className="flex w-full items-center justify-center gap-2 rounded-lg border border-green-200 bg-green-50 py-2 text-sm font-medium text-green-700">
+                      <CheckCircle2 className="h-4 w-4" /> Quote submitted
+                    </div>
                   ) : lead.status === "closed" ? (
-                    <Button variant="outline" className="w-full" disabled>
+                    <div className="flex w-full items-center justify-center rounded-lg border border-neutral-200 bg-neutral-50 py-2 text-sm text-neutral-500">
                       Request closed
-                    </Button>
+                    </div>
                   ) : (
-                    <Button
-                      className="w-full bg-gold-gradient font-semibold text-[#1A1A1A] hover:opacity-90"
-                      onClick={() => setQuotingLead(lead)}
-                    >
-                      Send a quote
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 text-xs"
+                        onClick={e => { e.preventDefault(); setQuotingLead(lead); }}
+                      >
+                        Quick quote
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="flex-1 bg-gold-gradient text-xs font-semibold text-[#1A1A1A] hover:opacity-90"
+                      >
+                        View details →
+                      </Button>
+                    </div>
                   )}
                 </div>
               </div>
-            </div>
+            </Link>
           ))}
         </div>
       )}

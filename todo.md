@@ -56,3 +56,9 @@
 - [x] Jeweller lead card: "Extracted product details" section showing metal, gold weight, diamond weight, stone type, listed price, description
 - [x] Vitest tests for scraper (5 tests) — 13/13 total tests passing
 - [x] Deploy updated version (checkpoint + redeploy)
+
+## Jeweller UI Improvements (Jul 15 — Features 3 & 4)
+- [x] Feature 3: Lead card scraped details — 2-column grid layout with gold-tinted background, per-field labels, description excerpt
+- [x] Feature 4: Full-screen lead detail page — large hero image, extracted specs card, buyer requirements card, sticky quote form panel
+- [x] Route /jeweller/leads/:id wired in App.tsx
+- [x] Checkpoint and redeploy

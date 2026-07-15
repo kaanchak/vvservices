@@ -1,0 +1,462 @@
+import AppShell from "@/components/AppShell";
+import { CategoryBadge, StatusBadge, formatINR } from "@/components/Brand";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { useAccount } from "@/hooks/useAccount";
+import { trpc } from "@/lib/trpc";
+import { categoryLabel } from "@shared/categories";
+import {
+  ArrowLeft,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  DollarSign,
+  ExternalLink,
+  Gem,
+  ImagePlus,
+  IndianRupee,
+  Info,
+  StickyNote,
+  Tag,
+  User,
+  Weight,
+} from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { useLocation } from "wouter";
+import { jewellerNav } from "./JewellerDashboard";
+
+// ─── types ───────────────────────────────────────────────────────────────────
+
+interface ScrapedProduct {
+  imageUrl?: string;
+  title?: string;
+  description?: string;
+  price?: string;
+  currency?: string;
+  goldWeight?: string;
+  diamondWeight?: string;
+  metalType?: string;
+  stoneType?: string;
+  sourceUrl?: string;
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+function SpecRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-3 py-3">
+      <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#D4AF37]/10 text-[#8a6d1c]">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">{label}</p>
+        <p className="mt-0.5 text-sm font-semibold text-[#1A1A1A]">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── QuoteForm ────────────────────────────────────────────────────────────────
+
+function QuoteForm({
+  requestId,
+  alreadyQuoted,
+  isClosed,
+  onSuccess,
+}: {
+  requestId: number;
+  alreadyQuoted: boolean;
+  isClosed: boolean;
+  onSuccess: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [goldWeight, setGoldWeight] = useState("");
+  const [diamondWeight, setDiamondWeight] = useState("");
+  const [makingCharges, setMakingCharges] = useState("");
+  const [totalPrice, setTotalPrice] = useState("");
+  const [message, setMessage] = useState("");
+
+  const create = trpc.quotes.create.useMutation({
+    onSuccess: () => {
+      toast.success("Quote sent! The buyer sees it instantly.");
+      utils.requests.leads.invalidate();
+      utils.requests.getLeadById.invalidate({ id: requestId });
+      utils.quotes.mine.invalidate();
+      onSuccess();
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  if (alreadyQuoted) {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 p-4">
+        <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-green-600" />
+        <div>
+          <p className="font-semibold text-green-800">Quote submitted</p>
+          <p className="text-sm text-green-700">
+            Your quote has been sent to the buyer. You'll be notified when they respond.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isClosed) {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+        <Info className="h-5 w-5 flex-shrink-0 text-neutral-500" />
+        <p className="text-sm text-neutral-600">This request has been closed by the buyer.</p>
+      </div>
+    );
+  }
+
+  return (
+    <form
+      className="space-y-5"
+      onSubmit={e => {
+        e.preventDefault();
+        const total = parseInt(totalPrice);
+        if (!total || total <= 0) return toast.error("Please enter the total price");
+        create.mutate({
+          requestId,
+          goldWeightGrams: goldWeight ? parseFloat(goldWeight) : undefined,
+          diamondWeightCarats: diamondWeight ? parseFloat(diamondWeight) : undefined,
+          makingCharges: makingCharges ? parseInt(makingCharges) : undefined,
+          totalPrice: total,
+          message: message || undefined,
+        });
+      }}
+    >
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="goldWeight" className="flex items-center gap-1.5">
+            <Weight className="h-3.5 w-3.5 text-[#D4AF37]" />
+            Gold weight (grams)
+          </Label>
+          <Input
+            id="goldWeight"
+            type="number"
+            step="0.01"
+            min={0}
+            placeholder="e.g. 45.5"
+            value={goldWeight}
+            onChange={e => setGoldWeight(e.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="diamondWeight" className="flex items-center gap-1.5">
+            <Gem className="h-3.5 w-3.5 text-[#D4AF37]" />
+            Diamond weight (carats)
+          </Label>
+          <Input
+            id="diamondWeight"
+            type="number"
+            step="0.01"
+            min={0}
+            placeholder="e.g. 1.25"
+            value={diamondWeight}
+            onChange={e => setDiamondWeight(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="makingCharges" className="flex items-center gap-1.5">
+            <IndianRupee className="h-3.5 w-3.5 text-[#D4AF37]" />
+            Making charges (₹)
+          </Label>
+          <Input
+            id="makingCharges"
+            type="number"
+            min={0}
+            placeholder="e.g. 15,000"
+            value={makingCharges}
+            onChange={e => setMakingCharges(e.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="totalPrice" className="flex items-center gap-1.5">
+            <DollarSign className="h-3.5 w-3.5 text-[#D4AF37]" />
+            Total price (₹) *
+          </Label>
+          <Input
+            id="totalPrice"
+            type="number"
+            min={1}
+            required
+            placeholder="e.g. 1,85,000"
+            value={totalPrice}
+            onChange={e => setTotalPrice(e.target.value)}
+          />
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="message" className="flex items-center gap-1.5">
+          <StickyNote className="h-3.5 w-3.5 text-[#D4AF37]" />
+          Message to buyer
+        </Label>
+        <Textarea
+          id="message"
+          rows={3}
+          maxLength={2000}
+          placeholder="Certifications, delivery time, what's included, hallmark details…"
+          value={message}
+          onChange={e => setMessage(e.target.value)}
+        />
+      </div>
+      <Button
+        type="submit"
+        disabled={create.isPending}
+        className="w-full bg-gold-gradient py-6 text-base font-semibold text-[#1A1A1A] hover:opacity-90"
+      >
+        {create.isPending ? "Sending quote…" : "Send quote to buyer"}
+      </Button>
+    </form>
+  );
+}
+
+// ─── JewellerLeadDetail ───────────────────────────────────────────────────────
+
+export default function JewellerLeadDetail({ id }: { id: number }) {
+  const { account } = useAccount();
+  const [, navigate] = useLocation();
+
+  const { data: lead, isLoading, error } = trpc.requests.getLeadById.useQuery(
+    { id },
+    { enabled: !!account }
+  );
+
+  const scraped: ScrapedProduct | null = lead?.scrapedDetails
+    ? (() => { try { return JSON.parse(lead.scrapedDetails); } catch { return null; } })()
+    : null;
+
+  const extractedSpecs = scraped
+    ? [
+        { icon: <Tag className="h-4 w-4" />, label: "Metal type", value: scraped.metalType },
+        { icon: <Weight className="h-4 w-4" />, label: "Gold weight", value: scraped.goldWeight },
+        { icon: <Gem className="h-4 w-4" />, label: "Diamond weight", value: scraped.diamondWeight },
+        { icon: <Gem className="h-4 w-4" />, label: "Stone type", value: scraped.stoneType },
+        {
+          icon: <IndianRupee className="h-4 w-4" />,
+          label: "Listed / retail price",
+          value: scraped.price
+            ? `${scraped.currency && scraped.currency !== "INR" ? scraped.currency + " " : ""}${scraped.price}${scraped.currency === "INR" ? " (₹)" : ""}`
+            : undefined,
+        },
+      ].filter(s => s.value) as { icon: React.ReactNode; label: string; value: string }[]
+    : [];
+
+  return (
+    <AppShell nav={jewellerNav} requiredRole="jeweller" loginPath="/login">
+      {/* Back button */}
+      <button
+        onClick={() => navigate("/jeweller")}
+        className="mb-6 flex items-center gap-2 text-sm font-medium text-neutral-500 transition-colors hover:text-[#8a6d1c]"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Lead Feed
+      </button>
+
+      {isLoading ? (
+        <div className="space-y-6">
+          <div className="h-80 animate-pulse rounded-2xl bg-neutral-100" />
+          <div className="h-48 animate-pulse rounded-2xl bg-neutral-100" />
+        </div>
+      ) : error || !lead ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-8 text-center">
+          <p className="font-semibold text-red-700">Lead not found or not accessible.</p>
+          <Button variant="outline" className="mt-4" onClick={() => navigate("/jeweller")}>
+            Back to Lead Feed
+          </Button>
+        </div>
+      ) : (
+        <div className="grid gap-8 lg:grid-cols-[1fr_420px]">
+          {/* ── Left column: product details ─────────────────────────────── */}
+          <div className="space-y-6">
+            {/* Hero image */}
+            <div className="overflow-hidden rounded-2xl border border-[#D4AF37]/15 bg-neutral-100 shadow-sm">
+              {lead.imageUrl ? (
+                <img
+                  src={lead.imageUrl}
+                  alt={lead.title}
+                  className="h-80 w-full object-contain p-4 lg:h-[420px]"
+                  onError={e => {
+                    const el = e.target as HTMLImageElement;
+                    el.style.display = "none";
+                    el.parentElement!.classList.add("flex", "items-center", "justify-center");
+                  }}
+                />
+              ) : (
+                <div className="flex h-80 items-center justify-center text-neutral-300 lg:h-[420px]">
+                  <ImagePlus className="h-16 w-16" strokeWidth={1} />
+                </div>
+              )}
+            </div>
+
+            {/* Title + badges */}
+            <div>
+              <div className="flex flex-wrap items-center gap-3">
+                <CategoryBadge category={lead.category} />
+                <StatusBadge status={lead.status} />
+              </div>
+              <h1 className="mt-3 font-serif text-3xl font-semibold text-[#1A1A1A]">
+                {lead.title}
+              </h1>
+              <p className="mt-1 flex items-center gap-2 text-sm text-neutral-500">
+                <User className="h-3.5 w-3.5" />
+                Request from <span className="font-medium text-[#1A1A1A]">{lead.buyerName}</span>
+                <span className="text-neutral-300">·</span>
+                <Calendar className="h-3.5 w-3.5" />
+                {new Date(lead.createdAt).toLocaleDateString("en-IN", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </p>
+            </div>
+
+            {/* Extracted product specs */}
+            {extractedSpecs.length > 0 && (
+              <Card className="border-[#D4AF37]/25 bg-[#D4AF37]/5 shadow-none">
+                <CardHeader className="pb-2 pt-5">
+                  <CardTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[#8a6d1c]">
+                    <Gem className="h-4 w-4" />
+                    Extracted product specifications
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="divide-y divide-[#D4AF37]/15">
+                    {extractedSpecs.map(s => (
+                      <SpecRow key={s.label} icon={s.icon} label={s.label} value={s.value} />
+                    ))}
+                  </div>
+                  {scraped?.sourceUrl && (
+                    <a
+                      href={scraped.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 flex items-center gap-1.5 text-xs text-[#8a6d1c] underline-offset-2 hover:underline"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      View original product page
+                    </a>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Product description from scrape */}
+            {scraped?.description && (
+              <Card className="border-neutral-200 shadow-none">
+                <CardHeader className="pb-2 pt-5">
+                  <CardTitle className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                    Product description
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <p className="text-sm leading-relaxed text-neutral-700">{scraped.description}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Buyer requirements */}
+            <Card className="border-neutral-200 shadow-none">
+              <CardHeader className="pb-2 pt-5">
+                <CardTitle className="text-sm font-semibold uppercase tracking-wider text-neutral-500">
+                  Buyer requirements
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-0 pt-0">
+                <div className="divide-y divide-neutral-100">
+                  <SpecRow
+                    icon={<Tag className="h-4 w-4" />}
+                    label="Category"
+                    value={categoryLabel(lead.category)}
+                  />
+                  <SpecRow
+                    icon={<IndianRupee className="h-4 w-4" />}
+                    label="Budget range"
+                    value={
+                      lead.budgetMin || lead.budgetMax
+                        ? `${formatINR(lead.budgetMin)} – ${formatINR(lead.budgetMax)}`
+                        : "Flexible / not specified"
+                    }
+                  />
+                  {lead.timeline && (
+                    <SpecRow
+                      icon={<Clock className="h-4 w-4" />}
+                      label="Timeline"
+                      value={lead.timeline}
+                    />
+                  )}
+                </div>
+                {lead.notes && (
+                  <>
+                    <Separator className="my-3" />
+                    <div className="flex items-start gap-3 pt-1">
+                      <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-500">
+                        <StickyNote className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wider text-neutral-400">
+                          Additional notes
+                        </p>
+                        <p className="mt-1 text-sm leading-relaxed text-neutral-700">{lead.notes}</p>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* ── Right column: quote form (sticky on desktop) ──────────────── */}
+          <div className="lg:sticky lg:top-8 lg:self-start">
+            <Card className="border-[#D4AF37]/25 shadow-md">
+              <CardHeader className="border-b border-[#D4AF37]/15 pb-4 pt-6">
+                <CardTitle className="font-serif text-2xl text-[#1A1A1A]">
+                  Submit your quote
+                </CardTitle>
+                <p className="mt-1 text-sm text-neutral-500">
+                  Itemise your offer — the buyer sees it the moment you submit.
+                </p>
+                {/* Quick-reference badges */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {scraped?.goldWeight && (
+                    <Badge variant="outline" className="border-[#D4AF37]/40 bg-[#D4AF37]/5 text-[#8a6d1c]">
+                      Ref gold: {scraped.goldWeight}
+                    </Badge>
+                  )}
+                  {scraped?.diamondWeight && (
+                    <Badge variant="outline" className="border-[#D4AF37]/40 bg-[#D4AF37]/5 text-[#8a6d1c]">
+                      Ref diamond: {scraped.diamondWeight}
+                    </Badge>
+                  )}
+                  {(lead.budgetMin || lead.budgetMax) && (
+                    <Badge variant="outline" className="border-neutral-300 text-neutral-600">
+                      Budget: {formatINR(lead.budgetMin)} – {formatINR(lead.budgetMax)}
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="pt-6">
+                <QuoteForm
+                  requestId={lead.id}
+                  alreadyQuoted={lead.alreadyQuoted}
+                  isClosed={lead.status === "closed"}
+                  onSuccess={() => navigate("/jeweller")}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+    </AppShell>
+  );
+}

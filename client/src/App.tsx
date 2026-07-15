@@ -5,6 +5,7 @@ import BuyerDashboard from "@/pages/BuyerDashboard";
 import BuyerQuotes from "@/pages/BuyerQuotes";
 import Home from "@/pages/Home";
 import JewellerDashboard from "@/pages/JewellerDashboard";
+import JewellerLeadDetail from "@/pages/JewellerLeadDetail";
 import JewellerQuotes from "@/pages/JewellerQuotes";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
@@ -29,6 +30,9 @@ function Router() {
       {/* Jeweller area */}
       <Route path={"/jeweller"} component={JewellerDashboard} />
       <Route path={"/jeweller/quotes"} component={JewellerQuotes} />
+      <Route path={"/jeweller/leads/:id"}>
+        {params => <JewellerLeadDetail id={parseInt(params.id)} />}
+      </Route>
       {/* Admin area */}
       <Route path={"/admin"} component={AdminPanel} />
       <Route path={"/404"} component={NotFound} />

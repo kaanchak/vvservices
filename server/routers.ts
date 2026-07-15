@@ -225,6 +225,28 @@ export const appRouter = router({
       return withCounts;
     }),
 
+    /** Single lead detail for jeweller — verifies the lead is in their categories */
+    getLeadById: jewellerProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const request = await db.getRequestById(input.id);
+        if (!request) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Lead not found" });
+        }
+        const jeweller = await db.getAccountById(ctx.account.accountId);
+        const categories = (jeweller?.categories?.split(",") ?? []) as string[];
+        if (!categories.includes(request.category)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "This lead is not in your categories" });
+        }
+        const buyer = await db.getAccountById(request.buyerId);
+        const alreadyQuoted = await db.hasJewellerQuoted(request.id, ctx.account.accountId);
+        return {
+          ...request,
+          buyerName: buyer?.name ?? "Buyer",
+          alreadyQuoted,
+        };
+      }),
+
     /** Lead feed for the logged-in jeweller, filtered by their categories. */
     leads: jewellerProcedure.query(async ({ ctx }) => {
       const jeweller = await db.getAccountById(ctx.account.accountId);
