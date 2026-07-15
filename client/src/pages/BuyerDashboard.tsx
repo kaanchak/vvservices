@@ -60,6 +60,10 @@ interface ScrapedProduct {
   metalType?: string;
   stoneType?: string;
   sourceUrl: string;
+  /** true when the site blocked the scraper */
+  blocked?: boolean;
+  /** human-readable reason shown to the user */
+  blockedReason?: string;
 }
 
 // ─── ScrapedPreview panel ────────────────────────────────────────────────────
@@ -159,10 +163,16 @@ function NewRequestDialog() {
 
   const scrapeUrl = trpc.scraper.scrapeUrl.useMutation({
     onSuccess: data => {
-      setScraped(data);
-      setScrapeError(null);
-      // Auto-fill title if empty
-      if (!title && data.title) setTitle(data.title.slice(0, 191));
+      if (data.blocked) {
+        // Site blocked scraper — show graceful fallback, don't store as scraped
+        setScrapeError(data.blockedReason ?? "Auto-extraction wasn't possible for this site. You can still submit your request manually.");
+        setScraped(null);
+      } else {
+        setScraped(data as ScrapedProduct);
+        setScrapeError(null);
+        // Auto-fill title if empty
+        if (!title && data.title) setTitle(data.title.slice(0, 191));
+      }
     },
     onError: e => {
       setScrapeError(e.message);
@@ -382,9 +392,13 @@ function NewRequestDialog() {
                 )}
 
                 {scrapeError && (
-                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                    <span>{scrapeError}. You can still submit with this URL.</span>
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
+                    <div className="space-y-1">
+                      <p className="font-medium">Auto-extraction not available</p>
+                      <p>{scrapeError}</p>
+                      <p className="text-amber-700">You can still submit your request — add any details you know in the notes field below.</p>
+                    </div>
                   </div>
                 )}
 

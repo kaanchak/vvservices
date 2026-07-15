@@ -3,13 +3,10 @@ import { describe, expect, it } from "vitest";
 // Test the internal helpers by importing the scraper module
 // We test the regex/extraction logic without making real HTTP calls.
 
-// Re-export private helpers for testing by duplicating the logic inline
-// (since they're not exported). We test the public scrapeProductUrl with
-// a mock fetch to avoid network calls in CI.
-
 import { scrapeProductUrl } from "./scraper";
 
-// Mock fetch globally for this test file
+// ─── mock HTML fixtures ──────────────────────────────────────────────────────
+
 const mockHtmlProduct = `<!DOCTYPE html>
 <html>
 <head>
@@ -52,14 +49,22 @@ const mockHtmlNoDetails = `<!DOCTYPE html>
 <body><p>Welcome to our store.</p></body>
 </html>`;
 
-function makeMockFetch(html: string, contentType = "text/html; charset=utf-8") {
+// ─── mock fetch helpers ──────────────────────────────────────────────────────
+
+function makeMockFetch(html: string, contentType = "text/html; charset=utf-8", status = 200) {
   return async (_url: string) => {
     const encoder = new TextEncoder();
     const data = encoder.encode(html);
     let done = false;
     return {
-      ok: true,
-      headers: { get: (h: string) => h === "content-type" ? contentType : null },
+      ok: status >= 200 && status < 300,
+      status,
+      headers: {
+        get: (h: string) => {
+          if (h === "content-type") return contentType;
+          return null;
+        },
+      },
       body: {
         getReader: () => ({
           read: async () => {
@@ -74,10 +79,57 @@ function makeMockFetch(html: string, contentType = "text/html; charset=utf-8") {
   };
 }
 
+/** Simulates a server that always returns a given HTTP status (no body needed) */
+function makeMockFetchStatus(status: number) {
+  return async (_url: string) => ({
+    ok: false,
+    status,
+    headers: { get: (_h: string) => null },
+    body: null,
+  }) as unknown as Response;
+}
+
+/** Simulates N failures followed by a success */
+function makeMockFetchRetry(failCount: number, failStatus: number, successHtml: string) {
+  let calls = 0;
+  return async (_url: string): Promise<Response> => {
+    calls++;
+    if (calls <= failCount) {
+      return {
+        ok: false,
+        status: failStatus,
+        headers: { get: (_h: string) => null },
+        body: null,
+      } as unknown as Response;
+    }
+    const encoder = new TextEncoder();
+    const data = encoder.encode(successHtml);
+    let done = false;
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (h: string) => h === "content-type" ? "text/html" : null },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (done) return { done: true, value: undefined };
+            done = true;
+            return { done: false, value: data };
+          },
+          cancel: async () => {},
+        }),
+      },
+    } as unknown as Response;
+  };
+}
+
+// ─── tests ───────────────────────────────────────────────────────────────────
+
 describe("scrapeProductUrl", () => {
   it("extracts OG meta + JSON-LD product data", async () => {
     global.fetch = makeMockFetch(mockHtmlProduct) as typeof fetch;
     const result = await scrapeProductUrl("https://example.com/ring");
+    expect(result.blocked).toBeFalsy();
     expect(result.title).toBe("18K Rose Gold Diamond Ring");
     expect(result.imageUrl).toBe("https://example.com/ring.jpg");
     expect(result.description).toContain("diamond");
@@ -91,6 +143,7 @@ describe("scrapeProductUrl", () => {
   it("falls back to regex extraction from visible text", async () => {
     global.fetch = makeMockFetch(mockHtmlTextOnly) as typeof fetch;
     const result = await scrapeProductUrl("https://example.com/necklace");
+    expect(result.blocked).toBeFalsy();
     expect(result.title).toBeTruthy();
     // Price regex should find ₹2,20,000
     expect(result.price).toBeTruthy();
@@ -103,16 +156,42 @@ describe("scrapeProductUrl", () => {
   it("returns sourceUrl even when page has no product details", async () => {
     global.fetch = makeMockFetch(mockHtmlNoDetails) as typeof fetch;
     const result = await scrapeProductUrl("https://example.com/store");
+    expect(result.blocked).toBeFalsy();
     expect(result.sourceUrl).toBe("https://example.com/store");
     expect(result.title).toBeTruthy(); // falls back to <title>
   });
 
-  it("throws on non-HTML content type", async () => {
+  it("returns blocked=true with reason for non-HTML content type", async () => {
     global.fetch = makeMockFetch("{}", "application/json") as typeof fetch;
-    await expect(scrapeProductUrl("https://example.com/api")).rejects.toThrow("HTML");
+    const result = await scrapeProductUrl("https://example.com/api");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBeTruthy();
   });
 
   it("throws on invalid URL", async () => {
     await expect(scrapeProductUrl("not-a-url")).rejects.toThrow();
+  });
+
+  it("returns blocked=true with 429 reason when site rate-limits all retries", async () => {
+    // All 3 attempts return 429
+    global.fetch = makeMockFetchStatus(429) as typeof fetch;
+    const result = await scrapeProductUrl("https://example.com/blocked");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toMatch(/429|rate.limit/i);
+  });
+
+  it("returns blocked=true immediately for 403 (access denied, no retry)", async () => {
+    global.fetch = makeMockFetchStatus(403) as typeof fetch;
+    const result = await scrapeProductUrl("https://example.com/forbidden");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toMatch(/403|access denied/i);
+  });
+
+  it("succeeds after 1 retry when first attempt returns 503", async () => {
+    // First call: 503, second call: 200 with product HTML
+    global.fetch = makeMockFetchRetry(1, 503, mockHtmlProduct) as typeof fetch;
+    const result = await scrapeProductUrl("https://example.com/ring");
+    expect(result.blocked).toBeFalsy();
+    expect(result.title).toBe("18K Rose Gold Diamond Ring");
   });
 });

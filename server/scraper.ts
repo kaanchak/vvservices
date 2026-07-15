@@ -9,6 +9,12 @@
  *   diamondWeight: same
  *   metalType  : JSON-LD material → regex on text
  *   stoneType  : regex on text
+ *
+ * Anti-bot handling:
+ *   - Full browser-like headers (Chrome UA, Accept, Accept-Language, Sec-Fetch-*, etc.)
+ *   - Exponential backoff retry (up to 3 attempts: 0 ms, 1 s, 3 s)
+ *   - On 429 / 403 / repeated failure: returns a ScrapedProduct with blocked=true
+ *     so the caller can show a graceful "manual entry" fallback to the user
  */
 
 import * as cheerio from "cheerio";
@@ -24,6 +30,10 @@ export interface ScrapedProduct {
   metalType?: string;
   stoneType?: string;
   sourceUrl: string;
+  /** true when the site blocked the scraper — UI should show manual-entry fallback */
+  blocked?: boolean;
+  /** human-readable reason for the block, shown to the user */
+  blockedReason?: string;
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -43,6 +53,36 @@ function firstMatch(text: string, patterns: RegExp[]): string | undefined {
     if (m) return m[1]?.trim();
   }
   return undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─── browser-like request headers ───────────────────────────────────────────
+
+function buildHeaders(url: string): Record<string, string> {
+  const parsed = new URL(url);
+  return {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    Accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    Referer: `${parsed.protocol}//${parsed.hostname}/`,
+    "Sec-Ch-Ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    Connection: "keep-alive",
+  };
 }
 
 // ─── JSON-LD extraction ──────────────────────────────────────────────────────
@@ -172,10 +212,119 @@ function extractFromText(text: string): Partial<ScrapedProduct> {
   return result;
 }
 
-// ─── main scrape function ────────────────────────────────────────────────────
+// ─── fetch with retry + exponential backoff ──────────────────────────────────
 
-const TIMEOUT_MS = 12_000;
+const TIMEOUT_MS = 15_000;
 const MAX_BYTES = 2_000_000; // 2 MB cap
+const RETRY_DELAYS_MS = [0, 1_000, 3_000]; // 3 attempts total
+
+/** Status codes that are worth retrying */
+const RETRYABLE_CODES = new Set([429, 503, 502, 504]);
+/** Status codes that mean "blocked" — no point retrying */
+const BLOCKED_CODES = new Set([403, 401, 407]);
+
+interface FetchResult {
+  html: string;
+  blocked: false;
+}
+interface BlockedResult {
+  html: null;
+  blocked: true;
+  reason: string;
+}
+
+async function fetchWithRetry(url: string): Promise<FetchResult | BlockedResult> {
+  const headers = buildHeaders(url);
+  let lastStatus = 0;
+  let lastError = "";
+
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      await sleep(RETRY_DELAYS_MS[attempt]!);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    try {
+      const res = await fetch(url, { signal: controller.signal, headers });
+      clearTimeout(timer);
+      lastStatus = res.status;
+
+      // Immediately blocked — no retry
+      if (BLOCKED_CODES.has(res.status)) {
+        return {
+          html: null,
+          blocked: true,
+          reason: `The website returned HTTP ${res.status} (access denied). Auto-extraction is not possible for this site.`,
+        };
+      }
+
+      // Rate-limited — retry after delay
+      if (RETRYABLE_CODES.has(res.status)) {
+        // Check Retry-After header
+        const retryAfter = res.headers.get("retry-after");
+        if (retryAfter && attempt < RETRY_DELAYS_MS.length - 1) {
+          const wait = Math.min(parseInt(retryAfter, 10) * 1000 || RETRY_DELAYS_MS[attempt + 1]!, 8_000);
+          await sleep(wait);
+        }
+        lastError = `HTTP ${res.status}`;
+        continue;
+      }
+
+      if (!res.ok) {
+        lastError = `HTTP ${res.status}`;
+        // Non-retryable non-ok status
+        if (attempt === RETRY_DELAYS_MS.length - 1) break;
+        continue;
+      }
+
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("html")) {
+        return {
+          html: null,
+          blocked: true,
+          reason: "URL does not return an HTML page — it may be a direct file link or API endpoint.",
+        };
+      }
+
+      // Stream with size cap
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response body");
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          total += value.length;
+          chunks.push(value);
+          if (total > MAX_BYTES) { reader.cancel(); break; }
+        }
+      }
+      const html = new TextDecoder().decode(Buffer.concat(chunks));
+      return { html, blocked: false };
+
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError = msg.includes("abort") ? "Request timed out" : msg;
+      if (attempt < RETRY_DELAYS_MS.length - 1) continue;
+    }
+  }
+
+  // All retries exhausted
+  const isRateLimit = lastStatus === 429;
+  return {
+    html: null,
+    blocked: true,
+    reason: isRateLimit
+      ? "This website is rate-limiting automated requests (HTTP 429). You can still submit your request manually — paste the URL in the notes field so the jeweller can view it."
+      : `Could not load the page after ${RETRY_DELAYS_MS.length} attempts (${lastError}). Please check the URL or submit your request manually.`,
+  };
+}
+
+// ─── main scrape function ────────────────────────────────────────────────────
 
 export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   const result: ScrapedProduct = { sourceUrl: url };
@@ -190,48 +339,19 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   } catch {
     throw new Error("Invalid URL");
   }
+  // suppress unused-variable warning — parsed is used in buildHeaders
+  void parsed;
 
-  // Fetch with timeout and size cap
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const fetched = await fetchWithRetry(url);
 
-  let html: string;
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; VVServicesBot/1.0; +https://jewelleryhub-fsi6knjr.manus.space)",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-      },
-    });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const contentType = res.headers.get("content-type") || "";
-    if (!contentType.includes("html")) throw new Error("URL does not return an HTML page");
-
-    // Stream with size cap
-    const reader = res.body?.getReader();
-    if (!reader) throw new Error("No response body");
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.length;
-        chunks.push(value);
-        if (total > MAX_BYTES) { reader.cancel(); break; }
-      }
-    }
-    html = new TextDecoder().decode(Buffer.concat(chunks));
-  } catch (err: unknown) {
-    clearTimeout(timer);
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Could not fetch URL: ${msg}`);
+  // Graceful blocked fallback — return partial result with blocked flag
+  if (fetched.blocked) {
+    result.blocked = true;
+    result.blockedReason = fetched.reason;
+    return result;
   }
 
+  const { html } = fetched;
   const $ = cheerio.load(html);
 
   // ── JSON-LD ──
