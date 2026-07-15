@@ -326,6 +326,51 @@ async function fetchWithRetry(url: string): Promise<FetchResult | BlockedResult>
 
 // ─── main scrape function ────────────────────────────────────────────────────
 
+
+// ─── Shopify product JSON API helper ─────────────────────────────────────────
+// Shopify exposes /products/<handle>.json — public, structured, no JS needed.
+
+interface ShopifyProductJson {
+  product?: {
+    title?: string;
+    body_html?: string;
+    images?: Array<{ src?: string }>;
+    variants?: Array<{ price?: string }>;
+    tags?: string[];
+  };
+}
+
+async function tryShopifyProductJson(url: string): Promise<Partial<ScrapedProduct> | null> {
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/products\/([^/?#]+)/);
+    if (!match) return null;
+    const handle = match[1];
+    const apiUrl = `${parsed.protocol}//${parsed.hostname}/products/${handle}.json`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    const res = await fetch(apiUrl, { signal: controller.signal, headers: buildHeaders(apiUrl) });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const json = await res.json() as ShopifyProductJson;
+    const p = json?.product;
+    if (!p) return null;
+    const out: Partial<ScrapedProduct> = {};
+    if (p.title) out.title = p.title;
+    if (p.images?.[0]?.src) out.imageUrl = p.images[0].src;
+    if (p.variants?.[0]?.price) { out.price = p.variants[0].price; out.currency = "INR"; }
+    if (p.body_html) out.description = p.body_html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
+    const searchText = [p.title, ...(p.tags || [])].join(" ");
+    const metalMatch = searchText.match(/\b((?:18|22|24|14|9)\s*(?:K|kt|karat|carat)\s*(?:yellow\s+|white\s+|rose\s+)?gold|platinum|sterling\s+silver)\b/i);
+    if (metalMatch) out.metalType = metalMatch[1];
+    const stoneMatch = searchText.match(/\b(diamond|emerald|ruby|sapphire|moissanite|pearl|amethyst|topaz)\b/i);
+    if (stoneMatch) out.stoneType = stoneMatch[1];
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   const result: ScrapedProduct = { sourceUrl: url };
 
@@ -342,12 +387,28 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   // suppress unused-variable warning — parsed is used in buildHeaders
   void parsed;
 
+  // ── Shopify early check ──
+  // For Shopify product URLs, try the JSON API first — it returns structured
+  // product-specific data even when the HTML page is JS-rendered.
+  const isShopifyProductUrl = /\/products\/[^/?#]+/.test(new URL(url).pathname);
+  if (isShopifyProductUrl) {
+    const shopifyEarly = await tryShopifyProductJson(url);
+    if (shopifyEarly) {
+      Object.assign(result, shopifyEarly);
+    }
+  }
+
   const fetched = await fetchWithRetry(url);
 
   // Graceful blocked fallback — return partial result with blocked flag
   if (fetched.blocked) {
     result.blocked = true;
     result.blockedReason = fetched.reason;
+    // If we already got Shopify data, return it (not blocked)
+    if (result.title || result.imageUrl) {
+      result.blocked = false;
+      result.blockedReason = undefined;
+    }
     return result;
   }
 
@@ -360,7 +421,12 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
     jsonLdScripts.push($(el).html() || "");
   });
   const fromLd = extractFromJsonLd(jsonLdScripts);
-  Object.assign(result, fromLd);
+  // Only fill fields not already populated by the Shopify early check
+  for (const [k, v] of Object.entries(fromLd)) {
+    if (v && !(result as unknown as Record<string, unknown>)[k]) {
+      (result as unknown as Record<string, unknown>)[k] = v;
+    }
+  }
 
   // ── Open Graph / Twitter meta ──
   const ogImage =
@@ -408,6 +474,23 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
         return false; // break
       }
     });
+  }
+
+  // ── Shopify JSON API fallback ─────────────────────────────────────────────
+  // Shopify stores render product pages via JS, so OG/JSON-LD may only contain
+  // generic store metadata. Try the Shopify product JSON endpoint instead.
+  if (!result.title || !result.imageUrl) {
+    const shopifyData = await tryShopifyProductJson(url);
+    if (shopifyData) {
+      if (!result.title && shopifyData.title) result.title = shopifyData.title;
+      if (!result.imageUrl && shopifyData.imageUrl) result.imageUrl = shopifyData.imageUrl;
+      if (!result.description && shopifyData.description) result.description = shopifyData.description;
+      if (!result.price && shopifyData.price) { result.price = shopifyData.price; result.currency = shopifyData.currency; }
+      if (!result.metalType && shopifyData.metalType) result.metalType = shopifyData.metalType;
+      if (!result.goldWeight && shopifyData.goldWeight) result.goldWeight = shopifyData.goldWeight;
+      if (!result.diamondWeight && shopifyData.diamondWeight) result.diamondWeight = shopifyData.diamondWeight;
+      if (!result.stoneType && shopifyData.stoneType) result.stoneType = shopifyData.stoneType;
+    }
   }
 
   // ── Regex extraction from visible text ──

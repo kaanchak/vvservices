@@ -62,3 +62,10 @@
 - [x] Feature 4: Full-screen lead detail page — large hero image, extracted specs card, buyer requirements card, sticky quote form panel
 - [x] Route /jeweller/leads/:id wired in App.tsx
 - [x] Checkpoint and redeploy
+
+## Bug Fixes (Jul 15 — Round 2)
+- [x] Bug 1: Image proxy endpoint /api/image-proxy?url=... added (server/imageProxy.ts, registered in _core/index.ts)
+- [x] Bug 1b: All image src references updated to use proxiedImageUrl() across BuyerDashboard, JewellerDashboard, JewellerLeadDetail, JewellerQuotes
+- [x] Bug 2: Jeweller quote form — auto-calculated total (gold ₹7,000/g + diamond ₹50,000/ct + making charges), breakdown shown in both QuoteDialog and JewellerLeadDetail
+- [x] Bug 3: materialgood.com fixed — Shopify JSON API (/products/<handle>.json) called first for Shopify product URLs; JSON-LD no longer overwrites Shopify data; returns correct title/image/price/metal/stone
+- [x] Checkpoint and redeploy (16/16 tests passing)

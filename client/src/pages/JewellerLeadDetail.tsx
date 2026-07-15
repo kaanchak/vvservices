@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useAccount } from "@/hooks/useAccount";
+import { proxiedImageUrl } from "@/lib/imageProxy";
 import { trpc } from "@/lib/trpc";
 import { categoryLabel } from "@shared/categories";
 import {
@@ -15,7 +16,6 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
-  DollarSign,
   ExternalLink,
   Gem,
   ImagePlus,
@@ -64,6 +64,10 @@ function SpecRow({ icon, label, value }: { icon: React.ReactNode; label: string;
 
 // ─── QuoteForm ────────────────────────────────────────────────────────────────
 
+// Default rates (₹ per unit) — jeweller can override via the rate fields
+const DEFAULT_GOLD_RATE = 7000;   // ₹7,000 per gram (22K approx)
+const DEFAULT_DIAMOND_RATE = 50000; // ₹50,000 per carat
+
 function QuoteForm({
   requestId,
   alreadyQuoted,
@@ -79,8 +83,15 @@ function QuoteForm({
   const [goldWeight, setGoldWeight] = useState("");
   const [diamondWeight, setDiamondWeight] = useState("");
   const [makingCharges, setMakingCharges] = useState("");
-  const [totalPrice, setTotalPrice] = useState("");
+  const [goldRate, setGoldRate] = useState(String(DEFAULT_GOLD_RATE));
+  const [diamondRate, setDiamondRate] = useState(String(DEFAULT_DIAMOND_RATE));
   const [message, setMessage] = useState("");
+
+  // Auto-calculated total
+  const goldCost = (parseFloat(goldWeight) || 0) * (parseFloat(goldRate) || DEFAULT_GOLD_RATE);
+  const diamondCost = (parseFloat(diamondWeight) || 0) * (parseFloat(diamondRate) || DEFAULT_DIAMOND_RATE);
+  const makingCost = parseInt(makingCharges) || 0;
+  const totalPrice = Math.round(goldCost + diamondCost + makingCost);
 
   const create = trpc.quotes.create.useMutation({
     onSuccess: () => {
@@ -121,18 +132,47 @@ function QuoteForm({
       className="space-y-5"
       onSubmit={e => {
         e.preventDefault();
-        const total = parseInt(totalPrice);
-        if (!total || total <= 0) return toast.error("Please enter the total price");
+        if (!totalPrice || totalPrice <= 0) return toast.error("Total price must be greater than zero");
         create.mutate({
           requestId,
           goldWeightGrams: goldWeight ? parseFloat(goldWeight) : undefined,
           diamondWeightCarats: diamondWeight ? parseFloat(diamondWeight) : undefined,
           makingCharges: makingCharges ? parseInt(makingCharges) : undefined,
-          totalPrice: total,
+          totalPrice,
           message: message || undefined,
         });
       }}
     >
+      {/* Rates row */}
+      <div className="rounded-xl border border-[#D4AF37]/20 bg-[#D4AF37]/5 p-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Rate settings (₹)</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label htmlFor="goldRate" className="text-xs text-neutral-600">Gold rate / gram</Label>
+            <Input
+              id="goldRate"
+              type="number"
+              min={1}
+              value={goldRate}
+              onChange={e => setGoldRate(e.target.value)}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="diamondRate" className="text-xs text-neutral-600">Diamond rate / carat</Label>
+            <Input
+              id="diamondRate"
+              type="number"
+              min={1}
+              value={diamondRate}
+              onChange={e => setDiamondRate(e.target.value)}
+              className="h-8 text-sm"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Weights + making charges */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="goldWeight" className="flex items-center gap-1.5">
@@ -165,35 +205,41 @@ function QuoteForm({
           />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="makingCharges" className="flex items-center gap-1.5">
-            <IndianRupee className="h-3.5 w-3.5 text-[#D4AF37]" />
-            Making charges (₹)
-          </Label>
-          <Input
-            id="makingCharges"
-            type="number"
-            min={0}
-            placeholder="e.g. 15,000"
-            value={makingCharges}
-            onChange={e => setMakingCharges(e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="totalPrice" className="flex items-center gap-1.5">
-            <DollarSign className="h-3.5 w-3.5 text-[#D4AF37]" />
-            Total price (₹) *
-          </Label>
-          <Input
-            id="totalPrice"
-            type="number"
-            min={1}
-            required
-            placeholder="e.g. 1,85,000"
-            value={totalPrice}
-            onChange={e => setTotalPrice(e.target.value)}
-          />
+      <div className="space-y-2">
+        <Label htmlFor="makingCharges" className="flex items-center gap-1.5">
+          <IndianRupee className="h-3.5 w-3.5 text-[#D4AF37]" />
+          Making charges (₹)
+        </Label>
+        <Input
+          id="makingCharges"
+          type="number"
+          min={0}
+          placeholder="e.g. 15,000"
+          value={makingCharges}
+          onChange={e => setMakingCharges(e.target.value)}
+        />
+      </div>
+
+      {/* Auto-calculated total */}
+      <div className="rounded-xl border border-[#D4AF37]/40 bg-gradient-to-br from-[#D4AF37]/10 to-[#D4AF37]/5 p-4">
+        <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Price breakdown</p>
+        <div className="space-y-1.5 text-sm">
+          <div className="flex justify-between text-neutral-600">
+            <span>Gold ({goldWeight || "0"} g × ₹{Number(goldRate).toLocaleString("en-IN")})</span>
+            <span>₹{goldCost.toLocaleString("en-IN")}</span>
+          </div>
+          <div className="flex justify-between text-neutral-600">
+            <span>Diamond ({diamondWeight || "0"} ct × ₹{Number(diamondRate).toLocaleString("en-IN")})</span>
+            <span>₹{diamondCost.toLocaleString("en-IN")}</span>
+          </div>
+          <div className="flex justify-between text-neutral-600">
+            <span>Making charges</span>
+            <span>₹{makingCost.toLocaleString("en-IN")}</span>
+          </div>
+          <div className="mt-2 flex justify-between border-t border-[#D4AF37]/30 pt-2 font-bold text-[#1A1A1A]">
+            <span>Total price</span>
+            <span className="text-lg text-[#8a6d1c]">₹{totalPrice.toLocaleString("en-IN")}</span>
+          </div>
         </div>
       </div>
       <div className="space-y-2">
@@ -283,7 +329,7 @@ export default function JewellerLeadDetail({ id }: { id: number }) {
             <div className="overflow-hidden rounded-2xl border border-[#D4AF37]/15 bg-neutral-100 shadow-sm">
               {lead.imageUrl ? (
                 <img
-                  src={lead.imageUrl}
+                  src={proxiedImageUrl(lead.imageUrl)}
                   alt={lead.title}
                   className="h-80 w-full object-contain p-4 lg:h-[420px]"
                   onError={e => {

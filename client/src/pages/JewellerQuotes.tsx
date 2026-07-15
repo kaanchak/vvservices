@@ -4,6 +4,7 @@ import { jewellerNav } from "@/pages/JewellerDashboard";
 import { useAccount } from "@/hooks/useAccount";
 import { useSocket } from "@/hooks/useSocket";
 import { trpc } from "@/lib/trpc";
+import { proxiedImageUrl } from "@/lib/imageProxy";
 import { FileText, ImagePlus } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
@@ -77,7 +78,7 @@ export default function JewellerQuotes() {
               <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-neutral-100">
                 {row.requestImageUrl ? (
                   <img
-                    src={row.requestImageUrl}
+                    src={proxiedImageUrl(row.requestImageUrl)}
                     alt={row.requestTitle}
                     className="h-full w-full object-cover"
                   />

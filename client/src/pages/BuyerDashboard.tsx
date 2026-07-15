@@ -22,6 +22,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useAccount } from "@/hooks/useAccount";
 import { useSocket } from "@/hooks/useSocket";
+import { proxiedImageUrl } from "@/lib/imageProxy";
 import { trpc } from "@/lib/trpc";
 import { CATEGORIES, TIMELINES, type CategorySlug } from "@shared/categories";
 import {
@@ -104,7 +105,7 @@ function ScrapedPreview({
       <div className="flex gap-4">
         {data.imageUrl && (
           <img
-            src={data.imageUrl}
+            src={proxiedImageUrl(data.imageUrl)}
             alt="Extracted product"
             className="h-24 w-24 flex-shrink-0 rounded-lg object-cover"
             onError={e => {
@@ -545,7 +546,7 @@ export default function BuyerDashboard() {
                 <div className="relative h-44 overflow-hidden bg-neutral-100">
                   {r.imageUrl ? (
                     <img
-                      src={r.imageUrl}
+                      src={proxiedImageUrl(r.imageUrl)}
                       alt={r.title}
                       className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                     />
