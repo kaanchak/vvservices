@@ -18,6 +18,7 @@
  */
 
 import * as cheerio from "cheerio";
+import { storagePut } from "./storage";
 
 export interface ScrapedProduct {
   imageUrl?: string;
@@ -510,5 +511,55 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
     result.description = result.description.replace(/\s+/g, " ").trim().slice(0, 500);
   }
 
+  // ── Re-host image to our S3 storage ──────────────────────────────────────────────────────────────────────────────────
+  // Download the external image and upload to our own S3 so it is always
+  // served from our CDN — bypasses CORS, hotlink blocking, and IP-based bans.
+  if (result.imageUrl) {
+    result.imageUrl = await reHostImage(result.imageUrl) ?? result.imageUrl;
+  }
+
   return result;
+}
+
+// ─── Image re-hosting helper ──────────────────────────────────────────────────────────────────────────────────
+
+async function reHostImage(externalUrl: string): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    const res = await fetch(externalUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": new URL(externalUrl).origin + "/",
+      },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    let contentType = res.headers.get("content-type") || "image/jpeg";
+    // Some CDNs (e.g. CaratLane) return application/octet-stream for images.
+    // In that case, infer the MIME type from the URL file extension.
+    if (!contentType.startsWith("image/")) {
+      const urlLower = externalUrl.toLowerCase().split("?")[0];
+      if (urlLower.endsWith(".jpg") || urlLower.endsWith(".jpeg")) contentType = "image/jpeg";
+      else if (urlLower.endsWith(".png")) contentType = "image/png";
+      else if (urlLower.endsWith(".webp")) contentType = "image/webp";
+      else if (urlLower.endsWith(".gif")) contentType = "image/gif";
+      else if (urlLower.endsWith(".avif")) contentType = "image/avif";
+      else if (contentType === "application/octet-stream") contentType = "image/jpeg"; // last resort
+      else return null; // truly not an image
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 500) return null; // skip tiny/placeholder images
+    // Derive a clean filename from the URL
+    const urlPath = new URL(externalUrl).pathname;
+    const ext = urlPath.split(".").pop()?.replace(/[^a-z0-9]/gi, "").slice(0, 5) || "jpg";
+    const key = `scraped-images/img_${Date.now()}.${ext}`;
+    const { url } = await storagePut(key, buf, contentType);
+    return url; // e.g. /manus-storage/scraped-images/img_xxx.jpg
+  } catch {
+    return null; // silently fall back to original URL
+  }
 }

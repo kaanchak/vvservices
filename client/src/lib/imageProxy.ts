@@ -1,21 +1,18 @@
 /**
- * Returns a proxied image URL that routes through our backend,
- * bypassing CORS restrictions on external jewellery site images.
+ * Returns the correct image URL for display.
  *
- * Only proxies http/https URLs that look external.
- * Passes through relative paths, data URIs, and already-proxied URLs unchanged.
+ * Scraped images are re-hosted to /manus-storage/... at scrape time, so they
+ * pass through directly with no CORS issues. Any remaining external URLs
+ * (user-pasted URLs, legacy records) are routed through /api/image-proxy as
+ * a fallback so they still display rather than breaking.
  */
 export function proxiedImageUrl(url: string | undefined | null): string | undefined {
   if (!url) return undefined;
-  // Already proxied, data URI, or relative path — pass through
-  if (
-    url.startsWith("/api/image-proxy") ||
-    url.startsWith("data:") ||
-    url.startsWith("/")
-  ) {
+  // Relative paths (/manus-storage/..., /api/image-proxy/...) and data URIs — serve directly
+  if (url.startsWith("/") || url.startsWith("data:")) {
     return url;
   }
-  // Only proxy http/https external URLs
+  // External URLs — route through image proxy as fallback
   if (url.startsWith("http://") || url.startsWith("https://")) {
     return `/api/image-proxy?url=${encodeURIComponent(url)}`;
   }
