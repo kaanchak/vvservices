@@ -11,6 +11,8 @@ import "./index.css";
 const queryClient = new QueryClient();
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
+  // VVServices uses its own email/password auth (see /login pages).
+  // We intentionally DO NOT redirect to Manus OAuth on unauthorized errors.
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
 
@@ -18,7 +20,7 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
 
   if (!isUnauthorized) return;
 
-  startLogin();
+  void startLogin; // keep import used; custom pages handle their own redirects
 };
 
 queryClient.getQueryCache().subscribe(event => {

@@ -1,37 +1,48 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import AdminPanel from "@/pages/AdminPanel";
+import BuyerDashboard from "@/pages/BuyerDashboard";
+import BuyerQuotes from "@/pages/BuyerQuotes";
+import Home from "@/pages/Home";
+import JewellerDashboard from "@/pages/JewellerDashboard";
+import JewellerQuotes from "@/pages/JewellerQuotes";
+import Login from "@/pages/Login";
 import NotFound from "@/pages/NotFound";
+import Signup from "@/pages/Signup";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Home from "./pages/Home";
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
       <Route path={"/"} component={Home} />
+      <Route path={"/login"} component={Login} />
+      <Route path={"/signup"}>{() => <Signup />}</Route>
+      <Route path={"/signup/jeweller"}>{() => <Signup jeweller />}</Route>
+      {/* Buyer area */}
+      <Route path={"/app"} component={BuyerDashboard} />
+      <Route path={"/app/quotes"}>{() => <BuyerQuotes />}</Route>
+      <Route path={"/app/requests/:id"}>
+        {params => <BuyerQuotes requestId={parseInt(params.id)} />}
+      </Route>
+      {/* Jeweller area */}
+      <Route path={"/jeweller"} component={JewellerDashboard} />
+      <Route path={"/jeweller/quotes"} component={JewellerQuotes} />
+      {/* Admin area */}
+      <Route path={"/admin"} component={AdminPanel} />
       <Route path={"/404"} component={NotFound} />
-      {/* Final fallback route */}
       <Route component={NotFound} />
     </Switch>
   );
 }
 
-// NOTE: About Theme
-// - First choose a default theme according to your design style (dark or light bg), than change color palette in index.css
-//   to keep consistent foreground/background color across components
-// - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
-
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider
-        defaultTheme="light"
-        // switchable
-      >
+      <ThemeProvider defaultTheme="light">
         <TooltipProvider>
-          <Toaster />
+          <Toaster position="top-center" richColors />
           <Router />
         </TooltipProvider>
       </ThemeProvider>

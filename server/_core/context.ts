@@ -1,11 +1,14 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import type { User } from "../../drizzle/schema";
+import { getSessionFromRequest, type AccountSession } from "../accountAuth";
 import { sdk } from "./sdk";
 
 export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
   res: CreateExpressContextOptions["res"];
   user: User | null;
+  /** VVServices custom email/password session (buyer/jeweller/admin) */
+  account: AccountSession | null;
 };
 
 export async function createContext(
@@ -20,9 +23,17 @@ export async function createContext(
     user = null;
   }
 
+  let account: AccountSession | null = null;
+  try {
+    account = await getSessionFromRequest(opts.req);
+  } catch {
+    account = null;
+  }
+
   return {
     req: opts.req,
     res: opts.res,
     user,
+    account,
   };
 }
