@@ -13,7 +13,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
 import { emitNewQuote, emitNewRequest, emitQuoteStatus } from "./realtime";
-import { scrapeProductUrl } from "./scraper";
+import { scrapeProductUrl, reHostImageForRequest } from "./scraper";
 import { storagePut } from "./storage";
 
 const categoryEnum = z.enum(CATEGORY_SLUGS);
@@ -170,7 +170,7 @@ export const appRouter = router({
         z.object({
           title: z.string().min(1).max(191),
           category: categoryEnum,
-          imageUrl: z.string().url().max(2000).optional(),
+          imageUrl: z.string().max(2000).optional(), // accepts full URLs and /manus-storage/ relative paths
           imageBase64: z.string().max(8_000_000).optional(),
           imageMimeType: z.string().max(100).optional(),
           budgetMin: z.number().int().min(0).optional(),
@@ -184,6 +184,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         let imageUrl = input.imageUrl;
         if (input.imageBase64) {
+          // User uploaded a file — store it to S3
           const buffer = Buffer.from(input.imageBase64, "base64");
           const ext = (input.imageMimeType || "image/jpeg").split("/")[1] || "jpg";
           const { url } = await storagePut(
@@ -192,6 +193,16 @@ export const appRouter = router({
             input.imageMimeType || "image/jpeg"
           );
           imageUrl = url;
+        } else if (imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
+          // External URL from URL-paste mode — re-host to our S3 so it always displays
+          console.log("[requests.create] Re-hosting external image:", imageUrl.slice(0, 80));
+          try {
+            const rehosted = await reHostImageForRequest(imageUrl);
+            console.log("[requests.create] Re-host result:", rehosted ? rehosted.slice(0, 80) : "null (fallback to external)");
+            if (rehosted) imageUrl = rehosted;
+          } catch (err) {
+            console.error("[requests.create] Image re-host threw:", (err as Error)?.message);
+          }
         }
         const id = await db.createRequest({
           buyerId: ctx.account.accountId,

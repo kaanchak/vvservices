@@ -22,6 +22,10 @@ import { storagePut } from "./storage";
 
 export interface ScrapedProduct {
   imageUrl?: string;
+  /** base64-encoded image bytes — set when storagePut is unavailable; client should upload via imageBase64 path */
+  imageBase64?: string;
+  /** MIME type for imageBase64 */
+  imageMimeType?: string;
   title?: string;
   description?: string;
   price?: string;
@@ -514,14 +518,63 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   // ── Re-host image to our S3 storage ──────────────────────────────────────────────────────────────────────────────────
   // Download the external image and upload to our own S3 so it is always
   // served from our CDN — bypasses CORS, hotlink blocking, and IP-based bans.
+  // If storagePut fails (e.g. in some production environments), fall back to
+  // returning the raw image bytes as base64 so the client can upload them
+  // via the existing imageBase64 → storagePut path in requests.create.
   if (result.imageUrl) {
-    result.imageUrl = await reHostImage(result.imageUrl) ?? result.imageUrl;
+    const hosted = await reHostImage(result.imageUrl);
+    if (hosted) {
+      result.imageUrl = hosted;
+    } else {
+      // storagePut failed — download bytes and return as base64 for client-side upload
+      const b64 = await downloadImageAsBase64(result.imageUrl);
+      if (b64) {
+        result.imageBase64 = b64.data;
+        result.imageMimeType = b64.mimeType;
+        // Keep imageUrl as the external URL so the client has a fallback
+      }
+    }
   }
 
   return result;
 }
 
 // ─── Image re-hosting helper ──────────────────────────────────────────────────────────────────────────────────
+
+export async function reHostImageForRequest(externalUrl: string): Promise<string | null> {
+  return reHostImage(externalUrl);
+}
+
+async function downloadImageAsBase64(externalUrl: string): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12_000);
+    const res = await fetch(externalUrl, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": new URL(externalUrl).origin + "/",
+      },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    let mimeType = res.headers.get("content-type") || "image/jpeg";
+    if (!mimeType.startsWith("image/")) {
+      const urlLower = externalUrl.toLowerCase().split("?")[0];
+      if (urlLower.endsWith(".jpg") || urlLower.endsWith(".jpeg")) mimeType = "image/jpeg";
+      else if (urlLower.endsWith(".png")) mimeType = "image/png";
+      else if (urlLower.endsWith(".webp")) mimeType = "image/webp";
+      else mimeType = "image/jpeg";
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 500) return null;
+    return { data: buf.toString("base64"), mimeType };
+  } catch {
+    return null;
+  }
+}
 
 async function reHostImage(externalUrl: string): Promise<string | null> {
   try {
@@ -559,7 +612,8 @@ async function reHostImage(externalUrl: string): Promise<string | null> {
     const key = `scraped-images/img_${Date.now()}.${ext}`;
     const { url } = await storagePut(key, buf, contentType);
     return url; // e.g. /manus-storage/scraped-images/img_xxx.jpg
-  } catch {
-    return null; // silently fall back to original URL
+  } catch (err) {
+    console.error("[reHostImage] Failed to re-host image:", (err as Error)?.message ?? err);
+    return null; // fall back to original URL
   }
 }

@@ -52,6 +52,10 @@ export const buyerNav = [
 
 interface ScrapedProduct {
   imageUrl?: string;
+  /** base64-encoded image bytes when storagePut failed server-side */
+  imageBase64?: string;
+  /** MIME type for imageBase64 */
+  imageMimeType?: string;
   title?: string;
   description?: string;
   price?: string;
@@ -103,9 +107,11 @@ function ScrapedPreview({
       </div>
 
       <div className="flex gap-4">
-        {data.imageUrl && (
+        {(data.imageUrl || data.imageBase64) && (
           <img
-            src={proxiedImageUrl(data.imageUrl)}
+            src={data.imageBase64
+              ? `data:${data.imageMimeType ?? 'image/jpeg'};base64,${data.imageBase64}`
+              : proxiedImageUrl(data.imageUrl!)}
             alt="Extracted product"
             className="h-24 w-24 flex-shrink-0 rounded-lg object-cover"
             onError={e => {
@@ -252,9 +258,12 @@ function NewRequestDialog() {
     if (min && max && min > max) {
       return toast.error("Minimum budget cannot exceed maximum");
     }
-    // Use scraped image if available and no upload
+    // Use scraped image if available and no upload.
+    // If the server returned imageBase64 (storagePut failed server-side), use that
+    // as the upload so the existing working imageBase64 → storagePut path handles it.
+    const scrapedHasBase64 = imageMode === "url" && !!scraped?.imageBase64;
     const finalImageUrl =
-      imageMode === "url" && imageUrl
+      imageMode === "url" && imageUrl && !scrapedHasBase64
         ? (scraped?.imageUrl ?? imageUrl)
         : undefined;
 
@@ -262,8 +271,12 @@ function NewRequestDialog() {
       title,
       category,
       imageUrl: finalImageUrl,
-      imageBase64: imageMode === "upload" && imageBase64 ? imageBase64 : undefined,
-      imageMimeType: imageMimeType ?? undefined,
+      imageBase64: scrapedHasBase64
+        ? scraped!.imageBase64
+        : (imageMode === "upload" && imageBase64 ? imageBase64 : undefined),
+      imageMimeType: scrapedHasBase64
+        ? (scraped!.imageMimeType ?? "image/jpeg")
+        : (imageMimeType ?? undefined),
       budgetMin: min,
       budgetMax: max,
       timeline: timeline || undefined,
