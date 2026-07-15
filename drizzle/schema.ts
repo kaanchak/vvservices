@@ -71,6 +71,8 @@ export const requests = mysqlTable("requests", {
   budgetMax: int("budgetMax"),
   timeline: varchar("timeline", { length: 100 }),
   notes: text("notes"),
+  /** JSON blob of ScrapedProduct data extracted from imageUrl when it is a web URL */
+  scrapedDetails: text("scrapedDetails"),
   status: mysqlEnum("status", ["open", "quoted", "closed"]).default("open").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });

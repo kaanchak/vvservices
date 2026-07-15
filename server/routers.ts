@@ -13,6 +13,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
 import { emitNewQuote, emitNewRequest, emitQuoteStatus } from "./realtime";
+import { scrapeProductUrl } from "./scraper";
 import { storagePut } from "./storage";
 
 const categoryEnum = z.enum(CATEGORY_SLUGS);
@@ -148,6 +149,20 @@ export const appRouter = router({
       }),
   }),
 
+  // --- URL scraper (public) --------------------------------------------------
+  scraper: router({
+    scrapeUrl: publicProcedure
+      .input(z.object({ url: z.string().url().max(2000) }))
+      .mutation(async ({ input }) => {
+        try {
+          return await scrapeProductUrl(input.url);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : "Failed to scrape URL";
+          throw new TRPCError({ code: "BAD_REQUEST", message: msg });
+        }
+      }),
+  }),
+
   // --- Buyer requests ---------------------------------------------------------
   requests: router({
     create: buyerProcedure
@@ -162,6 +177,8 @@ export const appRouter = router({
           budgetMax: z.number().int().min(0).optional(),
           timeline: z.string().max(100).optional(),
           notes: z.string().max(2000).optional(),
+          /** JSON-stringified ScrapedProduct from the URL scraper */
+          scrapedDetails: z.string().max(10_000).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -185,6 +202,7 @@ export const appRouter = router({
           budgetMax: input.budgetMax,
           timeline: input.timeline,
           notes: input.notes,
+          scrapedDetails: input.scrapedDetails,
         });
         const request = await db.getRequestById(id);
         const buyer = await db.getAccountById(ctx.account.accountId);

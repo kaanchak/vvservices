@@ -24,6 +24,19 @@ export const jewellerNav = [
   { href: "/jeweller/quotes", label: "My Quotes" },
 ];
 
+interface ScrapedProduct {
+  imageUrl?: string;
+  title?: string;
+  description?: string;
+  price?: string;
+  currency?: string;
+  goldWeight?: string;
+  diamondWeight?: string;
+  metalType?: string;
+  stoneType?: string;
+  sourceUrl: string;
+}
+
 type Lead = {
   id: number;
   title: string;
@@ -33,6 +46,7 @@ type Lead = {
   budgetMax: number | null;
   timeline: string | null;
   notes: string | null;
+  scrapedDetails: string | null;
   status: string;
   createdAt: Date;
   buyerName: string | null;
@@ -287,6 +301,47 @@ export default function JewellerDashboard() {
                     {lead.notes}
                   </p>
                 )}
+
+                {/* Scraped product details */}
+                {(() => {
+                  const scraped: ScrapedProduct | null = lead.scrapedDetails
+                    ? (() => { try { return JSON.parse(lead.scrapedDetails); } catch { return null; } })()
+                    : null;
+                  if (!scraped) return null;
+                  const details: { label: string; value?: string }[] = [
+                    { label: "Metal", value: scraped.metalType },
+                    { label: "Gold", value: scraped.goldWeight },
+                    { label: "Diamond", value: scraped.diamondWeight },
+                    { label: "Stone", value: scraped.stoneType },
+                    { label: "Listed price", value: scraped.price ? `${scraped.currency ?? ""}${scraped.price}`.trim() : undefined },
+                  ].filter(d => d.value);
+                  if (details.length === 0 && !scraped.description) return null;
+                  return (
+                    <div className="mt-3 rounded-lg border border-[#D4AF37]/25 bg-[#D4AF37]/5 p-3">
+                      <p className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#8a6d1c]">
+                        <Gem className="h-3 w-3" /> Extracted product details
+                      </p>
+                      {details.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {details.map(d => (
+                            <span
+                              key={d.label}
+                              className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-700 shadow-sm"
+                            >
+                              <span className="text-[#8a6d1c]">{d.label}:</span> {d.value}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {scraped.description && (
+                        <p className="mt-1.5 line-clamp-2 text-[11px] leading-relaxed text-neutral-600">
+                          {scraped.description}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="mt-auto pt-4">
                   {lead.alreadyQuoted ? (
                     <Button variant="outline" className="w-full" disabled>

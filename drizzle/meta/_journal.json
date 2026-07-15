@@ -15,6 +15,13 @@
       "when": 1784128442907,
       "tag": "0001_freezing_deadpool",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1784133038007,
+      "tag": "0002_handy_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }
