@@ -16,7 +16,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { proxiedImageUrl } from "@/lib/imageProxy";
 import { trpc } from "@/lib/trpc";
 import { categoryLabel } from "@shared/categories";
-import { CheckCircle2, Clock, Gem, ImagePlus, IndianRupee, User } from "lucide-react";
+import { CheckCircle2, Clock, Gem, ImagePlus, IndianRupee, TrendingUp, User } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -55,8 +55,8 @@ type Lead = {
   alreadyQuoted: boolean;
 };
 
-const DIALOG_GOLD_RATE = 7000;
 const DIALOG_DIAMOND_RATE = 50000;
+type GoldPurity = "9kt" | "14kt" | "18kt";
 
 function QuoteDialog({
   lead,
@@ -66,15 +66,39 @@ function QuoteDialog({
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
+
+  // Live gold price from API
+  const { data: goldPriceData } = trpc.goldPrice.current.useQuery();
+
+  // Purity state
+  const [purity, setPurity] = useState<GoldPurity>("18kt");
+
+  // Auto-fill from scraped details
+  const scraped = useMemo(() => {
+    if (!lead?.scrapedDetails) return null;
+    try { return JSON.parse(lead.scrapedDetails); } catch { return null; }
+  }, [lead?.scrapedDetails]);
+
+  const scrapedGoldWeight = scraped?.goldWeight ? parseFloat(scraped.goldWeight) : undefined;
+  const scrapedDiamondWeight = scraped?.diamondWeight ? parseFloat(scraped.diamondWeight) : undefined;
+
   const [goldWeight, setGoldWeight] = useState("");
   const [diamondWeight, setDiamondWeight] = useState("");
   const [makingCharges, setMakingCharges] = useState("");
-  const [goldRate, setGoldRate] = useState(String(DIALOG_GOLD_RATE));
   const [diamondRate, setDiamondRate] = useState(String(DIALOG_DIAMOND_RATE));
   const [message, setMessage] = useState("");
 
-  const goldCost = (parseFloat(goldWeight) || 0) * (parseFloat(goldRate) || DIALOG_GOLD_RATE);
-  const diamondCost = (parseFloat(diamondWeight) || 0) * (parseFloat(diamondRate) || DIALOG_DIAMOND_RATE);
+  // Compute live gold rate from API based on purity
+  const liveGoldRate = goldPriceData
+    ? (purity === "9kt" ? goldPriceData.pricePerGram9kt : purity === "14kt" ? goldPriceData.pricePerGram14kt : goldPriceData.pricePerGram18kt)
+    : null;
+
+  // Effective gold weight: user input or scraped fallback
+  const effectiveGoldWeight = goldWeight || (scrapedGoldWeight ? String(scrapedGoldWeight) : "");
+  const effectiveDiamondWeight = diamondWeight || (scrapedDiamondWeight ? String(scrapedDiamondWeight) : "");
+
+  const goldCost = (parseFloat(effectiveGoldWeight) || 0) * (liveGoldRate || 0);
+  const diamondCost = (parseFloat(effectiveDiamondWeight) || 0) * (parseFloat(diamondRate) || DIALOG_DIAMOND_RATE);
   const makingCost = parseInt(makingCharges) || 0;
   const totalPrice = Math.round(goldCost + diamondCost + makingCost);
 
@@ -87,9 +111,9 @@ function QuoteDialog({
       setGoldWeight("");
       setDiamondWeight("");
       setMakingCharges("");
-      setGoldRate(String(DIALOG_GOLD_RATE));
       setDiamondRate(String(DIALOG_DIAMOND_RATE));
       setMessage("");
+      setPurity("18kt");
     },
     onError: e => toast.error(e.message),
   });
@@ -111,52 +135,97 @@ function QuoteDialog({
               if (!totalPrice || totalPrice <= 0) return toast.error("Total price must be greater than zero");
               create.mutate({
                 requestId: lead.id,
-                goldWeightGrams: goldWeight ? parseFloat(goldWeight) : undefined,
-                diamondWeightCarats: diamondWeight ? parseFloat(diamondWeight) : undefined,
+                goldWeightGrams: effectiveGoldWeight ? parseFloat(effectiveGoldWeight) : undefined,
+                diamondWeightCarats: effectiveDiamondWeight ? parseFloat(effectiveDiamondWeight) : undefined,
                 makingCharges: makingCharges ? parseInt(makingCharges) : undefined,
                 totalPrice,
                 message: message || undefined,
+                goldPurity: purity,
+                goldPricePerGram: liveGoldRate ?? undefined,
               });
             }}
           >
-            {/* Rate settings */}
-            <div className="rounded-xl border border-[#D4AF37]/20 bg-[#D4AF37]/5 p-3">
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Rate settings (₹)</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor="dGoldRate" className="text-xs text-neutral-600">Gold rate / gram</Label>
-                  <Input id="dGoldRate" type="number" min={1} value={goldRate} onChange={e => setGoldRate(e.target.value)} className="h-8 text-sm" />
+            {/* Live gold price banner */}
+            {goldPriceData && (
+              <div className="rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/8 p-3">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Live gold rate (today)</p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  {(["9kt", "14kt", "18kt"] as GoldPurity[]).map(p => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPurity(p)}
+                      className={`rounded-lg border py-2 text-xs font-semibold transition-all ${
+                        purity === p
+                          ? "border-[#D4AF37] bg-[#D4AF37]/20 text-[#8a6d1c]"
+                          : "border-[#D4AF37]/20 bg-white text-neutral-600 hover:border-[#D4AF37]/50"
+                      }`}
+                    >
+                      <div className="font-bold uppercase">{p}</div>
+                      <div className="text-[10px]">
+                        ₹{(p === "9kt" ? goldPriceData.pricePerGram9kt : p === "14kt" ? goldPriceData.pricePerGram14kt : goldPriceData.pricePerGram18kt).toLocaleString("en-IN")}/g
+                      </div>
+                    </button>
+                  ))}
                 </div>
-                <div className="space-y-1">
-                  <Label htmlFor="dDiamondRate" className="text-xs text-neutral-600">Diamond rate / carat</Label>
-                  <Input id="dDiamondRate" type="number" min={1} value={diamondRate} onChange={e => setDiamondRate(e.target.value)} className="h-8 text-sm" />
-                </div>
+              </div>
+            )}
+            {/* Auto-fill notice */}
+            {(scrapedGoldWeight || scrapedDiamondWeight) && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                <span className="font-semibold">Auto-filled from listing:</span>{" "}
+                {scrapedGoldWeight && `Gold ${scrapedGoldWeight}g`}
+                {scrapedGoldWeight && scrapedDiamondWeight && " · "}
+                {scrapedDiamondWeight && `Diamond ${scrapedDiamondWeight}ct`}
+                {" — edit below to override"}
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="goldWeight">Gold weight (grams)</Label>
+                <Input
+                  id="goldWeight"
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  placeholder={scrapedGoldWeight ? String(scrapedGoldWeight) : "e.g. 45.5"}
+                  value={goldWeight}
+                  onChange={e => setGoldWeight(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="diamondWeight">Diamond weight (carats)</Label>
+                <Input
+                  id="diamondWeight"
+                  type="number"
+                  step="0.01"
+                  min={0}
+                  placeholder={scrapedDiamondWeight ? String(scrapedDiamondWeight) : "e.g. 1.25"}
+                  value={diamondWeight}
+                  onChange={e => setDiamondWeight(e.target.value)}
+                />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="goldWeight">Gold weight (grams)</Label>
-                <Input id="goldWeight" type="number" step="0.01" min={0} placeholder="e.g. 45.5" value={goldWeight} onChange={e => setGoldWeight(e.target.value)} />
+                <Label htmlFor="makingCharges">Making charges (₹)</Label>
+                <Input id="makingCharges" type="number" min={0} placeholder="e.g. 15,000" value={makingCharges} onChange={e => setMakingCharges(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="diamondWeight">Diamond weight (carats)</Label>
-                <Input id="diamondWeight" type="number" step="0.01" min={0} placeholder="e.g. 1.25" value={diamondWeight} onChange={e => setDiamondWeight(e.target.value)} />
+                <Label htmlFor="dDiamondRate" className="text-xs text-neutral-600">Diamond rate / carat (₹)</Label>
+                <Input id="dDiamondRate" type="number" min={1} value={diamondRate} onChange={e => setDiamondRate(e.target.value)} className="h-10 text-sm" />
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="makingCharges">Making charges (₹)</Label>
-              <Input id="makingCharges" type="number" min={0} placeholder="e.g. 15,000" value={makingCharges} onChange={e => setMakingCharges(e.target.value)} />
             </div>
             {/* Auto-calculated total */}
             <div className="rounded-xl border border-[#D4AF37]/40 bg-gradient-to-br from-[#D4AF37]/10 to-[#D4AF37]/5 p-3">
               <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Price breakdown</p>
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-neutral-600">
-                  <span>Gold ({goldWeight || "0"} g × ₹{Number(goldRate).toLocaleString("en-IN")})</span>
+                  <span>Gold ({effectiveGoldWeight || "0"} g × ₹{(liveGoldRate ?? 0).toLocaleString("en-IN")} [{purity.toUpperCase()}])</span>
                   <span>₹{goldCost.toLocaleString("en-IN")}</span>
                 </div>
                 <div className="flex justify-between text-neutral-600">
-                  <span>Diamond ({diamondWeight || "0"} ct × ₹{Number(diamondRate).toLocaleString("en-IN")})</span>
+                  <span>Diamond ({effectiveDiamondWeight || "0"} ct × ₹{Number(diamondRate).toLocaleString("en-IN")})</span>
                   <span>₹{diamondCost.toLocaleString("en-IN")}</span>
                 </div>
                 <div className="flex justify-between text-neutral-600">
@@ -187,6 +256,8 @@ export default function JewellerDashboard() {
   const { account } = useAccount();
   const utils = trpc.useUtils();
   const [quotingLead, setQuotingLead] = useState<Lead | null>(null);
+
+  const { data: goldPriceData } = trpc.goldPrice.current.useQuery();
 
   const { data: leads, isLoading } = trpc.requests.leads.useQuery(undefined, {
     enabled: !!account,
@@ -229,6 +300,29 @@ export default function JewellerDashboard() {
             {categories.map(categoryLabel).join(", ") || "—"}
           </span>
         </p>
+        {/* Live gold price banner */}
+        {goldPriceData && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/8 px-4 py-3">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#8a6d1c]">
+              <TrendingUp className="h-3.5 w-3.5" />
+              Today’s Gold Rate
+            </div>
+            {([
+              { label: "24KT", value: goldPriceData.pricePerGram24kt },
+              { label: "18KT", value: goldPriceData.pricePerGram18kt },
+              { label: "14KT", value: goldPriceData.pricePerGram14kt },
+              { label: "9KT", value: goldPriceData.pricePerGram9kt },
+            ] as { label: string; value: number }[]).map(({ label, value }) => (
+              <div key={label} className="flex items-center gap-1 text-xs">
+                <span className="rounded bg-[#D4AF37]/20 px-1.5 py-0.5 font-bold text-[#8a6d1c]">{label}</span>
+                <span className="font-medium text-[#1A1A1A]">₹{value.toLocaleString("en-IN")}/g</span>
+              </div>
+            ))}
+            <span className="ml-auto text-[10px] text-neutral-400">
+              Updated {new Date(goldPriceData.fetchedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+        )}
       </div>
 
       {isLoading ? (

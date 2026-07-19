@@ -8,7 +8,7 @@
 - [x] Register /api/scheduled/syncGoldPrice handler in server/_core/index.ts
 - [ ] Create heartbeat cron job via manus-heartbeat CLI for 12 AM IST (18:30 UTC)
 - [ ] Show gold price on Home page (all 3 purities)
-- [ ] Show gold price on JewellerDashboard
+- [x] Show gold price on JewellerDashboard
 
 ## Phase 1: WhatsApp OTP Login
 - [x] Add whatsappNumber (nullable) to accounts table
@@ -18,7 +18,7 @@
 - [x] Add account.sendWhatsappOtp tRPC procedure (public)
 - [x] Add account.verifyWhatsappOtp tRPC procedure (public, creates session)
 - [x] Update Signup.tsx: add WhatsApp signup tab as primary method
-- [ ] Update Login.tsx: add WhatsApp login option
+- [x] Update Login.tsx: add WhatsApp login option
 
 ## Phase 1: Jeweller Quote Form Improvements
 - [x] Add goldPurity field to quotes table (9kt/14kt/18kt)
@@ -27,7 +27,7 @@
 - [x] Update JewellerLeadDetail.tsx: auto-fill goldWeight from scrapedDetails
 - [x] Update JewellerLeadDetail.tsx: auto-fill diamondWeight from scrapedDetails
 - [x] Update JewellerLeadDetail.tsx: live gold price from API, purity-adjusted
-- [ ] Update JewellerDashboard.tsx QuoteDialog: same purity + auto-fill changes
+- [x] Update JewellerDashboard.tsx QuoteDialog: same purity + auto-fill changes
 
 ## Phase 2 Skeleton: WhatsApp Business Bot (blank credentials)
 - [x] Create server/whatsappBot.ts with blank credential placeholders
@@ -48,4 +48,4 @@
 - [x] TypeScript check passes (no errors)
 - [x] Add vitest test for goldPrice purity calculation
 - [x] Add vitest test for whatsappOtp flow (normalizeWhatsappNumber)
-- [ ] Save checkpoint
+- [x] Save checkpoint
