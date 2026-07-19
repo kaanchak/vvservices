@@ -18,6 +18,7 @@
  */
 
 import * as cheerio from "cheerio";
+import * as dns from "dns";
 import { storagePut } from "./storage";
 
 export interface ScrapedProduct {
@@ -217,10 +218,94 @@ function extractFromText(text: string): Partial<ScrapedProduct> {
   return result;
 }
 
+// ─── SSRF protection ────────────────────────────────────────────────────────
+
+const SSRF_BLOCKED_MESSAGE = "This URL cannot be processed for security reasons";
+
+/**
+ * Returns true if the given IPv4 address falls within a private/internal range.
+ * Blocked ranges: 0.0.0.0/8, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12,
+ *                 192.168.0.0/16, 169.254.0.0/16 (link-local)
+ */
+function isPrivateIpv4(ip: string): boolean {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0) return true;                          // 0.0.0.0/8
+  if (a === 127) return true;                        // 127.0.0.0/8  (loopback)
+  if (a === 10) return true;                         // 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
+  if (a === 192 && b === 168) return true;            // 192.168.0.0/16
+  if (a === 169 && b === 254) return true;            // 169.254.0.0/16 (link-local)
+  return false;
+}
+
+/**
+ * Returns true if the given IPv6 address is a loopback or private address.
+ * Blocked: ::1 (loopback), fc00::/7 (unique local)
+ */
+function isPrivateIpv6(ip: string): boolean {
+  const normalized = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  if (normalized === "::1") return true;
+  // fc00::/7 covers fc00:: to fdff::
+  if (/^f[cd][0-9a-f]{2}:/i.test(normalized)) return true;
+  return false;
+}
+
+/**
+ * Validates a URL for SSRF safety:
+ *  1. Only http: and https: protocols are allowed.
+ *  2. Resolves the hostname to an IP via DNS *before* any request.
+ *  3. Rejects IPs that fall in private/internal ranges.
+ *
+ * Returns { blocked: false } when safe, or { blocked: true, reason } when unsafe.
+ */
+async function validateUrlForSsrf(
+  url: string
+): Promise<{ blocked: false } | { blocked: true; reason: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+  }
+
+  // 1. Protocol check — only http and https are allowed
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+  }
+
+  const hostname = parsed.hostname;
+
+  // 2. Reject bare IP literals that are already private
+  if (isPrivateIpv4(hostname) || isPrivateIpv6(hostname)) {
+    return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+  }
+
+  // 3. Resolve hostname -> IP and check again (DNS rebinding protection)
+  try {
+    const { address, family } = await dns.promises.lookup(hostname);
+    if (family === 4 && isPrivateIpv4(address)) {
+      return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+    }
+    if (family === 6 && isPrivateIpv6(address)) {
+      return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+    }
+    if (address === "127.0.0.1" || address === "0.0.0.0" || address === "::1") {
+      return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+    }
+  } catch {
+    // DNS resolution failed — treat as blocked to be safe
+    return { blocked: true, reason: SSRF_BLOCKED_MESSAGE };
+  }
+
+  return { blocked: false };
+}
+
 // ─── fetch with retry + exponential backoff ──────────────────────────────────
 
-const TIMEOUT_MS = 15_000;
-const MAX_BYTES = 2_000_000; // 2 MB cap
+const TIMEOUT_MS = 10_000;  // 10 s (tightened for SSRF hardening)
+const MAX_BYTES = 10_000_000; // 10 MB cap
 const RETRY_DELAYS_MS = [0, 1_000, 3_000]; // 3 attempts total
 
 /** Status codes that are worth retrying */
@@ -379,18 +464,15 @@ async function tryShopifyProductJson(url: string): Promise<Partial<ScrapedProduc
 export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   const result: ScrapedProduct = { sourceUrl: url };
 
-  // Validate URL
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      throw new Error("Only http/https URLs are supported");
-    }
-  } catch {
-    throw new Error("Invalid URL");
+  // ── SSRF validation (protocol + DNS pre-resolution + IP blocklist) ────────────
+  const ssrfCheck = await validateUrlForSsrf(url);
+  if (ssrfCheck.blocked) {
+    return {
+      sourceUrl: url,
+      blocked: true,
+      blockedReason: ssrfCheck.reason,
+    };
   }
-  // suppress unused-variable warning — parsed is used in buildHeaders
-  void parsed;
 
   // ── Shopify early check ──
   // For Shopify product URLs, try the JSON API first — it returns structured

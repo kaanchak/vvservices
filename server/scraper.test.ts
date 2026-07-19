@@ -168,8 +168,11 @@ describe("scrapeProductUrl", () => {
     expect(result.blockedReason).toBeTruthy();
   });
 
-  it("throws on invalid URL", async () => {
-    await expect(scrapeProductUrl("not-a-url")).rejects.toThrow();
+  it("returns blocked=true with security message for invalid URL", async () => {
+    // SSRF validation now returns blocked instead of throwing
+    const result = await scrapeProductUrl("not-a-url");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
   });
 
   it("returns blocked=true with 429 reason when site rate-limits all retries", async () => {
@@ -193,5 +196,61 @@ describe("scrapeProductUrl", () => {
     const result = await scrapeProductUrl("https://example.com/ring");
     expect(result.blocked).toBeFalsy();
     expect(result.title).toBe("18K Rose Gold Diamond Ring");
+  });
+
+  // ─── SSRF protection tests ─────────────────────────────────────────────────────────
+
+  it("SSRF: blocks localhost URL with exact security message", async () => {
+    const result = await scrapeProductUrl("http://localhost/admin");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks 127.0.0.1 (loopback) URL", async () => {
+    const result = await scrapeProductUrl("http://127.0.0.1:8080/secret");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks 10.x.x.x private IP URL", async () => {
+    const result = await scrapeProductUrl("http://10.0.0.1/internal");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks 192.168.x.x private IP URL", async () => {
+    const result = await scrapeProductUrl("http://192.168.1.100/router");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks 172.16.x.x private IP URL", async () => {
+    const result = await scrapeProductUrl("http://172.16.0.1/");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks 169.254.x.x link-local (metadata service) URL", async () => {
+    const result = await scrapeProductUrl("http://169.254.169.254/latest/meta-data/");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks non-HTTP protocol (file://)", async () => {
+    const result = await scrapeProductUrl("file:///etc/passwd");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks non-HTTP protocol (ftp://)", async () => {
+    const result = await scrapeProductUrl("ftp://example.com/file");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
+  });
+
+  it("SSRF: blocks data: URI", async () => {
+    const result = await scrapeProductUrl("data:text/html,<h1>hi</h1>");
+    expect(result.blocked).toBe(true);
+    expect(result.blockedReason).toBe("This URL cannot be processed for security reasons");
   });
 });

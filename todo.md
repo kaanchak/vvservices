@@ -69,3 +69,10 @@
 - [x] Bug 2: Jeweller quote form — auto-calculated total (gold ₹7,000/g + diamond ₹50,000/ct + making charges), breakdown shown in both QuoteDialog and JewellerLeadDetail
 - [x] Bug 3: materialgood.com fixed — Shopify JSON API (/products/<handle>.json) called first for Shopify product URLs; JSON-LD no longer overwrites Shopify data; returns correct title/image/price/metal/stone
 - [x] Checkpoint and redeploy (16/16 tests passing)
+
+## Security: SSRF Fix (Jul 19)
+- [x] SSRF protection in scraper.ts: protocol check (http/https only), DNS pre-resolution via dns.promises.lookup(), private IP blocklist (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 0.0.0.0)
+- [x] Timeout tightened to 10s (was 15s), response size cap raised to 10MB (was 2MB)
+- [x] Exact error message: "This URL cannot be processed for security reasons"
+- [x] 9 new SSRF vitest tests (localhost, 127.0.0.1, 10.x, 192.168.x, 172.16.x, 169.254.x, file://, ftp://, data:) — 25/25 total tests passing
+- [x] Checkpoint and redeploy
