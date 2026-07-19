@@ -114,6 +114,17 @@ export async function getAccountByEmail(email: string) {
   return rows[0];
 }
 
+export async function getAccountByWhatsapp(whatsappNumber: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.whatsappNumber, whatsappNumber))
+    .limit(1);
+  return rows[0];
+}
+
 export async function getAccountById(id: number) {
   const db = await getDb();
   if (!db) return undefined;

@@ -1,4 +1,5 @@
 import {
+  boolean,
   decimal,
   int,
   mysqlEnum,
@@ -14,12 +15,7 @@ import {
  * Columns use camelCase to match both database fields and generated types.
  */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -45,6 +41,8 @@ export const accounts = mysqlTable("accounts", {
   phone: varchar("phone", { length: 32 }),
   /** scrypt hash in the form `salt:hash` */
   passwordHash: varchar("passwordHash", { length: 512 }).notNull(),
+  /** WhatsApp number for OTP login and notifications (e.g. +919111130655) */
+  whatsappNumber: varchar("whatsappNumber", { length: 32 }),
   /** Jewellers only: business name shown on quotes */
   businessName: varchar("businessName", { length: 191 }),
   /** Jewellers only: comma-separated category slugs, e.g. "gold,diamond-gold" */
@@ -90,6 +88,10 @@ export const quotes = mysqlTable("quotes", {
   makingCharges: int("makingCharges"),
   totalPrice: int("totalPrice").notNull(),
   message: text("message"),
+  /** Gold purity used for this quote: 9kt = 9/24, 14kt = 14/24, 18kt = 18/24 */
+  goldPurity: mysqlEnum("goldPurity", ["9kt", "14kt", "18kt"]).default("18kt"),
+  /** Gold price per gram (INR) at the time of quoting, purity-adjusted */
+  goldPricePerGram: decimal("goldPricePerGram", { precision: 10, scale: 2 }),
   status: mysqlEnum("status", ["pending", "accepted", "dismissed"])
     .default("pending")
     .notNull(),
@@ -108,3 +110,66 @@ export const waitlist = mysqlTable("waitlist", {
 });
 
 export type WaitlistEntry = typeof waitlist.$inferSelect;
+
+/**
+ * Gold price snapshots fetched from the gold-api.com API.
+ * Prices are stored per gram in INR. Updated daily at 12 AM IST (18:30 UTC).
+ */
+export const goldPrices = mysqlTable("goldPrices", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Raw price per gram in INR (24kt / pure gold) */
+  pricePerGram24kt: decimal("pricePerGram24kt", { precision: 12, scale: 2 }).notNull(),
+  /** Derived: 9kt = 9/24 of 24kt price */
+  pricePerGram9kt: decimal("pricePerGram9kt", { precision: 12, scale: 2 }).notNull(),
+  /** Derived: 14kt = 14/24 of 24kt price */
+  pricePerGram14kt: decimal("pricePerGram14kt", { precision: 12, scale: 2 }).notNull(),
+  /** Derived: 18kt = 18/24 of 24kt price */
+  pricePerGram18kt: decimal("pricePerGram18kt", { precision: 12, scale: 2 }).notNull(),
+  /** Raw price per ounce from API (for reference) */
+  rawPricePerOunce: decimal("rawPricePerOunce", { precision: 14, scale: 2 }),
+  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
+});
+
+export type GoldPrice = typeof goldPrices.$inferSelect;
+export type InsertGoldPrice = typeof goldPrices.$inferInsert;
+
+/**
+ * WhatsApp OTP sessions for buyer login/registration.
+ * OTPs expire after 10 minutes and are single-use.
+ */
+export const whatsappOtps = mysqlTable("whatsappOtps", {
+  id: int("id").autoincrement().primaryKey(),
+  /** WhatsApp number in E.164 format, e.g. +919111130655 */
+  whatsappNumber: varchar("whatsappNumber", { length: 32 }).notNull(),
+  /** 6-digit OTP code */
+  otp: varchar("otp", { length: 6 }).notNull(),
+  /** Whether this OTP has been used */
+  used: boolean("used").default(false).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type WhatsappOtp = typeof whatsappOtps.$inferSelect;
+export type InsertWhatsappOtp = typeof whatsappOtps.$inferInsert;
+
+/**
+ * Phase 2 (SKELETON — credentials blank):
+ * Links a buyer's Instagram username to their WhatsApp number.
+ * Populated when user opts in to Instagram DM → WhatsApp notification flow.
+ */
+export const instagramWhatsappLinks = mysqlTable("instagramWhatsappLinks", {
+  id: int("id").autoincrement().primaryKey(),
+  accountId: int("accountId").notNull(),
+  /** Instagram username (without @) */
+  instagramUsername: varchar("instagramUsername", { length: 64 }).notNull(),
+  /** WhatsApp number in E.164 format */
+  whatsappNumber: varchar("whatsappNumber", { length: 32 }).notNull(),
+  /** Whether the link has been verified */
+  verified: boolean("verified").default(false).notNull(),
+  /** Verification code sent via Instagram DM */
+  verificationCode: varchar("verificationCode", { length: 16 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type InstagramWhatsappLink = typeof instagramWhatsappLinks.$inferSelect;
+export type InsertInstagramWhatsappLink = typeof instagramWhatsappLinks.$inferInsert;

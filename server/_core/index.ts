@@ -10,6 +10,9 @@ import { initRealtime } from "../realtime";
 import { registerImageProxy } from "../imageProxy";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { sdk } from "./sdk";
+import { fetchAndStoreGoldPrice } from "../goldPrice";
+import type { Request, Response } from "express";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -41,6 +44,51 @@ async function startServer() {
   registerStorageProxy(app);
   registerImageProxy(app);
   registerOAuthRoutes(app);
+  // --- Scheduled: Gold Price Sync (daily 12 AM IST = 18:30 UTC) ---
+  app.post("/api/scheduled/syncGoldPrice", async (req: Request, res: Response) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user.isCron) {
+        return res.status(403).json({ error: "cron-only" });
+      }
+      const result = await fetchAndStoreGoldPrice();
+      return res.json({
+        ok: true,
+        pricePerGram24kt: result.pricePerGram24kt,
+        pricePerGram18kt: result.pricePerGram18kt,
+        fetchedAt: result.fetchedAt,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error("[syncGoldPrice] Error:", message);
+      return res.status(500).json({
+        error: message,
+        stack,
+        context: { url: req.url },
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  // --- Scheduled: WhatsApp Notification Webhook (Phase 2 - blank credentials) ---
+  app.post("/api/webhooks/whatsapp", async (req: Request, res: Response) => {
+    // PHASE 2 PLACEHOLDER: WhatsApp Business webhook handler
+    // Fill in WHATSAPP_ACCESS_TOKEN and WHATSAPP_BUSINESS_ACCOUNT_ID to activate
+    // See server/whatsappBot.ts for implementation
+    console.log("[WhatsApp Webhook] Received (credentials not configured)");
+    return res.status(200).json({ status: "placeholder" });
+  });
+
+  // --- Scheduled: Instagram Notification Webhook (Phase 2 - blank credentials) ---
+  app.post("/api/webhooks/instagram", async (req: Request, res: Response) => {
+    // PHASE 2 PLACEHOLDER: Instagram Business webhook handler
+    // Fill in INSTAGRAM_BUSINESS_ACCOUNT_ID and INSTAGRAM_ACCESS_TOKEN to activate
+    // See server/instagramBot.ts for implementation
+    console.log("[Instagram Webhook] Received (credentials not configured)");
+    return res.status(200).json({ status: "placeholder" });
+  });
+
   // tRPC API
   app.use(
     "/api/trpc",

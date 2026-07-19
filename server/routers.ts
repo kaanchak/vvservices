@@ -15,6 +15,8 @@ import * as db from "./db";
 import { emitNewQuote, emitNewRequest, emitQuoteStatus } from "./realtime";
 import { scrapeProductUrl, reHostImageForRequest } from "./scraper";
 import { storagePut } from "./storage";
+import { getLatestGoldPrice, fetchAndStoreGoldPrice, getGoldPriceHistory } from "./goldPrice";
+import { sendWhatsappOtp, verifyWhatsappOtp, normalizeWhatsappNumber } from "./whatsappAuth";
 
 const categoryEnum = z.enum(CATEGORY_SLUGS);
 
@@ -80,8 +82,9 @@ export const appRouter = router({
           role: z.enum(["buyer", "jeweller"]),
           name: z.string().min(1).max(191),
           email: z.string().email().max(320),
-          phone: z.string().min(7).max(32),
-          password: z.string().min(6).max(128),
+          phone: z.string().min(7).max(32).optional(),
+          password: z.string().min(6).max(128).optional().default(""),
+          whatsappNumber: z.string().min(7).max(32).optional(),
           businessName: z.string().max(191).optional(),
           categories: z.array(categoryEnum).max(3).optional(),
           city: z.string().max(191).optional(),
@@ -94,6 +97,17 @@ export const appRouter = router({
             code: "CONFLICT",
             message: "An account with this email already exists. Please log in.",
           });
+        }
+        // Check if WhatsApp number already used
+        if (input.whatsappNumber) {
+          const normalized = normalizeWhatsappNumber(input.whatsappNumber);
+          const existingWa = await db.getAccountByWhatsapp(normalized);
+          if (existingWa) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "This WhatsApp number is already registered.",
+            });
+          }
         }
         if (input.role === "jeweller" && (!input.categories || input.categories.length === 0)) {
           throw new TRPCError({
@@ -110,6 +124,7 @@ export const appRouter = router({
           businessName: input.businessName,
           categories: input.categories?.join(","),
           city: input.city,
+          whatsappNumber: input.whatsappNumber ? normalizeWhatsappNumber(input.whatsappNumber) : undefined,
         });
         await setSessionCookie(ctx.req, ctx.res, { accountId: id, role: input.role });
         const account = await db.getAccountById(id);
@@ -137,6 +152,85 @@ export const appRouter = router({
       clearSessionCookie(ctx.req, ctx.res);
       return { success: true } as const;
     }),
+
+    /**
+     * Step 1 of WhatsApp login: send OTP to the given number.
+     * Works for both new registrations and existing accounts.
+     */
+    sendWhatsappOtp: publicProcedure
+      .input(z.object({ whatsappNumber: z.string().min(7).max(32) }))
+      .mutation(async ({ input }) => {
+        const { expiresAt } = await sendWhatsappOtp(input.whatsappNumber);
+        return { success: true, expiresAt } as const;
+      }),
+
+    /**
+     * Step 2 of WhatsApp login: verify OTP and create/login account.
+     * If the account doesn't exist, creates a new buyer account.
+     * If it exists, logs them in.
+     */
+    verifyWhatsappOtp: publicProcedure
+      .input(
+        z.object({
+          whatsappNumber: z.string().min(7).max(32),
+          otp: z.string().length(6),
+          /** Only required for new registrations */
+          name: z.string().min(1).max(191).optional(),
+          role: z.enum(["buyer", "jeweller"]).optional().default("buyer"),
+          businessName: z.string().max(191).optional(),
+          categories: z.array(z.enum(CATEGORY_SLUGS)).max(3).optional(),
+          city: z.string().max(191).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const normalized = normalizeWhatsappNumber(input.whatsappNumber);
+        const valid = await verifyWhatsappOtp(input.whatsappNumber, input.otp);
+        if (!valid) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Invalid or expired OTP. Please request a new code.",
+          });
+        }
+
+        // Check if account exists with this WhatsApp number
+        let account = await db.getAccountByWhatsapp(normalized);
+
+        if (!account) {
+          // New user — create account
+          if (!input.name) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Name is required for new registrations.",
+            });
+          }
+          if (input.role === "jeweller" && (!input.categories || input.categories.length === 0)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Please select at least one category you work with.",
+            });
+          }
+          // Generate a placeholder email from WhatsApp number
+          const placeholderEmail = `wa_${normalized.replace(/\+/g, "")}@vvservices.internal`;
+          const id = await db.createAccount({
+            role: input.role,
+            name: input.name,
+            email: placeholderEmail,
+            phone: normalized,
+            passwordHash: hashPassword(Math.random().toString(36)), // random password (WA login only)
+            whatsappNumber: normalized,
+            businessName: input.businessName,
+            categories: input.categories?.join(","),
+            city: input.city,
+          });
+          account = await db.getAccountById(id);
+        }
+
+        if (!account) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Account error" });
+
+        await setSessionCookie(ctx.req, ctx.res, { accountId: account.id, role: account.role });
+        const { passwordHash, ...rest } = account;
+        return rest;
+      }),
   }),
 
   // --- Waitlist -------------------------------------------------------------
@@ -287,6 +381,8 @@ export const appRouter = router({
           makingCharges: z.number().int().min(0).optional(),
           totalPrice: z.number().int().positive(),
           message: z.string().max(2000).optional(),
+          goldPurity: z.enum(["9kt", "14kt", "18kt"]).default("18kt"),
+          goldPricePerGram: z.number().min(0).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -309,6 +405,8 @@ export const appRouter = router({
           makingCharges: input.makingCharges,
           totalPrice: input.totalPrice,
           message: input.message,
+          goldPurity: input.goldPurity,
+          goldPricePerGram: input.goldPricePerGram?.toFixed(2),
         });
         if (request.status === "open") {
           await db.updateRequestStatus(request.id, "quoted");
@@ -375,6 +473,26 @@ export const appRouter = router({
         });
         return { success: true } as const;
       }),
+  }),
+
+  // --- Gold Price ---------------------------------------------------------------
+  goldPrice: router({
+    /** Get the latest gold price (all purities) */
+    current: publicProcedure.query(async () => {
+      const price = await getLatestGoldPrice();
+      return price;
+    }),
+
+    /** Get last 30 gold price snapshots for history/chart */
+    history: publicProcedure.query(async () => {
+      return getGoldPriceHistory(30);
+    }),
+
+    /** Admin: manually trigger a gold price refresh */
+    refresh: vvAdminProcedure.mutation(async () => {
+      const result = await fetchAndStoreGoldPrice();
+      return result;
+    }),
   }),
 
   // --- Admin --------------------------------------------------------------------

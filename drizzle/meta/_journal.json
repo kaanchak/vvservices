@@ -22,6 +22,13 @@
       "when": 1784133038007,
       "tag": "0002_handy_fabian_cortez",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1784488900430,
+      "tag": "0003_young_rictor",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useAccount } from "@/hooks/useAccount";
@@ -21,12 +28,14 @@ import {
   ImagePlus,
   IndianRupee,
   Info,
+  RefreshCw,
   StickyNote,
   Tag,
   User,
   Weight,
+  Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 import { jewellerNav } from "./JewellerDashboard";
@@ -46,6 +55,22 @@ interface ScrapedProduct {
   sourceUrl?: string;
 }
 
+type GoldPurity = "9kt" | "14kt" | "18kt";
+
+const PURITY_LABELS: Record<GoldPurity, string> = {
+  "9kt": "9KT (37.5%)",
+  "14kt": "14KT (58.3%)",
+  "18kt": "18KT (75%)",
+};
+
+const PURITY_FRACTION: Record<GoldPurity, number> = {
+  "9kt": 9 / 24,
+  "14kt": 14 / 24,
+  "18kt": 18 / 24,
+};
+
+const DEFAULT_DIAMOND_RATE = 50000; // ₹50,000 per carat
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function SpecRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
@@ -62,33 +87,64 @@ function SpecRow({ icon, label, value }: { icon: React.ReactNode; label: string;
   );
 }
 
-// ─── QuoteForm ────────────────────────────────────────────────────────────────
+/** Parse a weight string like "10g", "10 grams", "10.5" → number | null */
+function parseWeightString(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const match = raw.match(/[\d.]+/);
+  if (!match) return null;
+  const val = parseFloat(match[0]);
+  return isNaN(val) ? null : val;
+}
 
-// Default rates (₹ per unit) — jeweller can override via the rate fields
-const DEFAULT_GOLD_RATE = 7000;   // ₹7,000 per gram (22K approx)
-const DEFAULT_DIAMOND_RATE = 50000; // ₹50,000 per carat
+// ─── QuoteForm ────────────────────────────────────────────────────────────────
 
 function QuoteForm({
   requestId,
   alreadyQuoted,
   isClosed,
   onSuccess,
+  scraped,
 }: {
   requestId: number;
   alreadyQuoted: boolean;
   isClosed: boolean;
   onSuccess: () => void;
+  scraped: ScrapedProduct | null;
 }) {
   const utils = trpc.useUtils();
-  const [goldWeight, setGoldWeight] = useState("");
-  const [diamondWeight, setDiamondWeight] = useState("");
+
+  // ── Gold price from API ──
+  const { data: goldPriceData } = trpc.goldPrice.current.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000, // 5 min
+  });
+
+  // ── Purity state ──
+  const [purity, setPurity] = useState<GoldPurity>("18kt");
+
+  // Derived live gold rate for selected purity
+  const liveGoldRate24kt = goldPriceData?.pricePerGram24kt ?? null;
+  const liveGoldRateForPurity = liveGoldRate24kt
+    ? Math.round(liveGoldRate24kt * PURITY_FRACTION[purity])
+    : null;
+
+  // ── Weight fields — auto-filled from scraped data ──
+  const scrapedGoldWeight = useMemo(() => parseWeightString(scraped?.goldWeight), [scraped]);
+  const scrapedDiamondWeight = useMemo(() => parseWeightString(scraped?.diamondWeight), [scraped]);
+
+  const [goldWeight, setGoldWeight] = useState(scrapedGoldWeight ? String(scrapedGoldWeight) : "");
+  const [diamondWeight, setDiamondWeight] = useState(scrapedDiamondWeight ? String(scrapedDiamondWeight) : "");
   const [makingCharges, setMakingCharges] = useState("");
-  const [goldRate, setGoldRate] = useState(String(DEFAULT_GOLD_RATE));
   const [diamondRate, setDiamondRate] = useState(String(DEFAULT_DIAMOND_RATE));
   const [message, setMessage] = useState("");
 
+  // When purity changes, update the displayed gold rate (read-only, derived from live price)
+  const goldRateDisplay = liveGoldRateForPurity
+    ? `₹${liveGoldRateForPurity.toLocaleString("en-IN")}`
+    : "Loading…";
+
   // Auto-calculated total
-  const goldCost = (parseFloat(goldWeight) || 0) * (parseFloat(goldRate) || DEFAULT_GOLD_RATE);
+  const effectiveGoldRate = liveGoldRateForPurity ?? 7000; // fallback if API not loaded
+  const goldCost = (parseFloat(goldWeight) || 0) * effectiveGoldRate;
   const diamondCost = (parseFloat(diamondWeight) || 0) * (parseFloat(diamondRate) || DEFAULT_DIAMOND_RATE);
   const makingCost = parseInt(makingCharges) || 0;
   const totalPrice = Math.round(goldCost + diamondCost + makingCost);
@@ -140,44 +196,79 @@ function QuoteForm({
           makingCharges: makingCharges ? parseInt(makingCharges) : undefined,
           totalPrice,
           message: message || undefined,
+          goldPurity: purity,
+          goldPricePerGram: liveGoldRateForPurity ?? undefined,
         });
       }}
     >
-      {/* Rates row */}
-      <div className="rounded-xl border border-[#D4AF37]/20 bg-[#D4AF37]/5 p-3">
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Rate settings (₹)</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <Label htmlFor="goldRate" className="text-xs text-neutral-600">Gold rate / gram</Label>
-            <Input
-              id="goldRate"
-              type="number"
-              min={1}
-              value={goldRate}
-              onChange={e => setGoldRate(e.target.value)}
-              className="h-8 text-sm"
-            />
+      {/* ── Live Gold Price Banner ── */}
+      <div className="rounded-xl border border-[#D4AF37]/30 bg-gradient-to-r from-[#D4AF37]/10 to-[#D4AF37]/5 p-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Zap className="h-3.5 w-3.5 text-[#8a6d1c]" />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">
+              Live Gold Price (24KT)
+            </span>
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="diamondRate" className="text-xs text-neutral-600">Diamond rate / carat</Label>
-            <Input
-              id="diamondRate"
-              type="number"
-              min={1}
-              value={diamondRate}
-              onChange={e => setDiamondRate(e.target.value)}
-              className="h-8 text-sm"
-            />
-          </div>
+          {goldPriceData?.fetchedAt && (
+            <span className="text-[10px] text-neutral-400 flex items-center gap-1">
+              <RefreshCw className="h-2.5 w-2.5" />
+              Updated {new Date(goldPriceData.fetchedAt).toLocaleDateString("en-IN")}
+            </span>
+          )}
+        </div>
+        <div className="mt-1.5 flex items-baseline gap-2">
+          <span className="text-2xl font-bold text-[#1A1A1A]">
+            {liveGoldRate24kt
+              ? `₹${Math.round(liveGoldRate24kt).toLocaleString("en-IN")}`
+              : "—"}
+          </span>
+          <span className="text-sm text-neutral-500">per gram</span>
         </div>
       </div>
 
-      {/* Weights + making charges */}
+      {/* ── Gold Purity Selector ── */}
+      <div className="space-y-2">
+        <Label htmlFor="purity" className="flex items-center gap-1.5">
+          <Weight className="h-3.5 w-3.5 text-[#D4AF37]" />
+          Gold purity
+        </Label>
+        <Select value={purity} onValueChange={v => setPurity(v as GoldPurity)}>
+          <SelectTrigger id="purity" className="h-11">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(["9kt", "14kt", "18kt"] as GoldPurity[]).map(p => (
+              <SelectItem key={p} value={p}>
+                {PURITY_LABELS[p]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-neutral-400">
+          Gold rate for selected purity:{" "}
+          <span className="font-semibold text-[#8a6d1c]">{goldRateDisplay} / gram</span>
+        </p>
+      </div>
+
+      {/* ── Diamond rate ── */}
+      <div className="rounded-xl border border-[#D4AF37]/20 bg-[#D4AF37]/5 p-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Diamond rate (₹ / carat)</p>
+        <Input
+          type="number"
+          min={1}
+          value={diamondRate}
+          onChange={e => setDiamondRate(e.target.value)}
+          className="h-8 text-sm"
+        />
+      </div>
+
+      {/* ── Weights + making charges ── */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label htmlFor="goldWeight" className="flex items-center gap-1.5">
             <Weight className="h-3.5 w-3.5 text-[#D4AF37]" />
-            Gold weight (grams)
+            Gold weight (g)
           </Label>
           <Input
             id="goldWeight"
@@ -188,11 +279,16 @@ function QuoteForm({
             value={goldWeight}
             onChange={e => setGoldWeight(e.target.value)}
           />
+          {scrapedGoldWeight && (
+            <p className="text-[10px] text-[#8a6d1c]">
+              ↑ Auto-filled from listing
+            </p>
+          )}
         </div>
         <div className="space-y-2">
           <Label htmlFor="diamondWeight" className="flex items-center gap-1.5">
             <Gem className="h-3.5 w-3.5 text-[#D4AF37]" />
-            Diamond weight (carats)
+            Diamond weight (ct)
           </Label>
           <Input
             id="diamondWeight"
@@ -203,6 +299,11 @@ function QuoteForm({
             value={diamondWeight}
             onChange={e => setDiamondWeight(e.target.value)}
           />
+          {scrapedDiamondWeight && (
+            <p className="text-[10px] text-[#8a6d1c]">
+              ↑ Auto-filled from listing
+            </p>
+          )}
         </div>
       </div>
       <div className="space-y-2">
@@ -220,12 +321,16 @@ function QuoteForm({
         />
       </div>
 
-      {/* Auto-calculated total */}
+      {/* ── Auto-calculated total ── */}
       <div className="rounded-xl border border-[#D4AF37]/40 bg-gradient-to-br from-[#D4AF37]/10 to-[#D4AF37]/5 p-4">
         <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-[#8a6d1c]">Price breakdown</p>
         <div className="space-y-1.5 text-sm">
           <div className="flex justify-between text-neutral-600">
-            <span>Gold ({goldWeight || "0"} g × ₹{Number(goldRate).toLocaleString("en-IN")})</span>
+            <span>
+              Gold ({goldWeight || "0"} g × ₹{effectiveGoldRate.toLocaleString("en-IN")}
+              <span className="ml-1 text-[10px] text-neutral-400">({PURITY_LABELS[purity]})</span>
+              )
+            </span>
             <span>₹{goldCost.toLocaleString("en-IN")}</span>
           </div>
           <div className="flex justify-between text-neutral-600">
@@ -242,6 +347,7 @@ function QuoteForm({
           </div>
         </div>
       </div>
+
       <div className="space-y-2">
         <Label htmlFor="message" className="flex items-center gap-1.5">
           <StickyNote className="h-3.5 w-3.5 text-[#D4AF37]" />
@@ -369,7 +475,7 @@ export default function JewellerLeadDetail({ id }: { id: number }) {
 
             {/* Extracted product specs */}
             {extractedSpecs.length > 0 && (
-              <Card className="border-[#D4AF37]/25 bg-[#D4AF37]/5 shadow-none">
+              <Card className="border-[#D4AF37]/20 shadow-none">
                 <CardHeader className="pb-2 pt-5">
                   <CardTitle className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[#8a6d1c]">
                     <Gem className="h-4 w-4" />
@@ -497,6 +603,7 @@ export default function JewellerLeadDetail({ id }: { id: number }) {
                   alreadyQuoted={lead.alreadyQuoted}
                   isClosed={lead.status === "closed"}
                   onSuccess={() => navigate("/jeweller")}
+                  scraped={scraped}
                 />
               </CardContent>
             </Card>
