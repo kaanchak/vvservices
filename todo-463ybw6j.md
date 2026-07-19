@@ -6,8 +6,8 @@
 - [x] Create server/goldPrice.ts with fetch + purity calculation logic
 - [x] Add goldPrice tRPC router (current, history, refresh)
 - [x] Register /api/scheduled/syncGoldPrice handler in server/_core/index.ts
-- [ ] Create heartbeat cron job via manus-heartbeat CLI for 12 AM IST (18:30 UTC)
-- [ ] Show gold price on Home page (all 3 purities)
+- [x] Create heartbeat cron job via manus-heartbeat CLI for 12 AM IST (18:30 UTC) — task_uid: XNQ94j6uMh8tqbgwbMSfwZ
+- [x] Show gold price on Home page (all 3 purities)
 - [x] Show gold price on JewellerDashboard
 
 ## Phase 1: WhatsApp OTP Login
@@ -49,3 +49,7 @@
 - [x] Add vitest test for goldPrice purity calculation
 - [x] Add vitest test for whatsappOtp flow (normalizeWhatsappNumber)
 - [x] Save checkpoint
+
+## Robustness
+- [x] Add loading/empty state for Home page gold price ticker
+- [x] Trigger initial gold price fetch on server startup (so first run is populated)

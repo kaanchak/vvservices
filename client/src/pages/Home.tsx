@@ -13,6 +13,7 @@ import {
   Scale,
   Sparkles,
   Store,
+  TrendingUp,
   UserPlus,
 } from "lucide-react";
 import { useState } from "react";
@@ -110,6 +111,7 @@ function WaitlistForm() {
 export default function Home() {
   const { account } = useAccount();
   const [, navigate] = useLocation();
+  const { data: goldPriceData, isLoading: goldLoading } = trpc.goldPrice.current.useQuery();
 
   const dashboardPath =
     account?.role === "buyer"
@@ -219,6 +221,30 @@ export default function Home() {
                 <Sparkles className="h-4 w-4 text-[#D4AF37]" /> Real-time responses
               </span>
             </div>
+            {/* Live gold price ticker */}
+            {(goldLoading || goldPriceData) && (
+              <div className="mt-6 inline-flex flex-wrap items-center gap-3 rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/8 px-4 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-[#8a6d1c]">
+                  <TrendingUp className="h-3.5 w-3.5" />
+                  Live Gold Rate
+                </div>
+                {goldLoading && !goldPriceData ? (
+                  <span className="text-xs text-[#8a6d1c] animate-pulse">Loading...</span>
+                ) : goldPriceData ? (
+                  ([
+                    { label: "24KT", value: goldPriceData.pricePerGram24kt },
+                    { label: "18KT", value: goldPriceData.pricePerGram18kt },
+                    { label: "14KT", value: goldPriceData.pricePerGram14kt },
+                    { label: "9KT", value: goldPriceData.pricePerGram9kt },
+                  ] as { label: string; value: number }[]).map(({ label, value }) => (
+                    <div key={label} className="flex items-center gap-1 text-xs">
+                      <span className="rounded bg-[#D4AF37]/20 px-1.5 py-0.5 font-bold text-[#8a6d1c]">{label}</span>
+                      <span className="font-medium text-[#1A1A1A]">₹{value.toLocaleString("en-IN")}/g</span>
+                    </div>
+                  ))
+                ) : null}
+              </div>
+            )}
           </div>
 
           {/* Hero collage */}

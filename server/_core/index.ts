@@ -113,6 +113,11 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    // Trigger an initial gold price fetch on startup so the first request
+    // always has a price available (cron runs daily at 12 AM IST).
+    fetchAndStoreGoldPrice()
+      .then(r => console.log(`[startup] Gold price seeded: ₹${r.pricePerGram24kt}/g (24KT)`))
+      .catch(err => console.warn("[startup] Gold price seed failed (non-fatal):", err?.message));
   });
 }
 
