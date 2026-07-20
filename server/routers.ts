@@ -12,7 +12,14 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
-import { emitNewQuote, emitNewRequest, emitQuoteStatus } from "./realtime";
+import {
+  emitNewQuote,
+  emitNewRequest,
+  emitQuoteStatus,
+  emitNewMessage,
+  emitRequoteEvent,
+  emitThreadStatusChange,
+} from "./realtime";
 import { scrapeProductUrl, reHostImageForRequest } from "./scraper";
 import { storagePut } from "./storage";
 import { getLatestGoldPrice, fetchAndStoreGoldPrice, getGoldPriceHistory } from "./goldPrice";
@@ -153,10 +160,6 @@ export const appRouter = router({
       return { success: true } as const;
     }),
 
-    /**
-     * Step 1 of WhatsApp login: send OTP to the given number.
-     * Works for both new registrations and existing accounts.
-     */
     sendWhatsappOtp: publicProcedure
       .input(z.object({ whatsappNumber: z.string().min(7).max(32) }))
       .mutation(async ({ input }) => {
@@ -164,17 +167,11 @@ export const appRouter = router({
         return { success: true, expiresAt } as const;
       }),
 
-    /**
-     * Step 2 of WhatsApp login: verify OTP and create/login account.
-     * If the account doesn't exist, creates a new buyer account.
-     * If it exists, logs them in.
-     */
     verifyWhatsappOtp: publicProcedure
       .input(
         z.object({
           whatsappNumber: z.string().min(7).max(32),
           otp: z.string().length(6),
-          /** Only required for new registrations */
           name: z.string().min(1).max(191).optional(),
           role: z.enum(["buyer", "jeweller"]).optional().default("buyer"),
           businessName: z.string().max(191).optional(),
@@ -192,11 +189,9 @@ export const appRouter = router({
           });
         }
 
-        // Check if account exists with this WhatsApp number
         let account = await db.getAccountByWhatsapp(normalized);
 
         if (!account) {
-          // New user — create account
           if (!input.name) {
             throw new TRPCError({
               code: "BAD_REQUEST",
@@ -209,14 +204,13 @@ export const appRouter = router({
               message: "Please select at least one category you work with.",
             });
           }
-          // Generate a placeholder email from WhatsApp number
           const placeholderEmail = `wa_${normalized.replace(/\+/g, "")}@vvservices.internal`;
           const id = await db.createAccount({
             role: input.role,
             name: input.name,
             email: placeholderEmail,
             phone: normalized,
-            passwordHash: hashPassword(Math.random().toString(36)), // random password (WA login only)
+            passwordHash: hashPassword(Math.random().toString(36)),
             whatsappNumber: normalized,
             businessName: input.businessName,
             categories: input.categories?.join(","),
@@ -264,21 +258,19 @@ export const appRouter = router({
         z.object({
           title: z.string().min(1).max(191),
           category: categoryEnum,
-          imageUrl: z.string().max(2000).optional(), // accepts full URLs and /manus-storage/ relative paths
+          imageUrl: z.string().max(2000).optional(),
           imageBase64: z.string().max(8_000_000).optional(),
           imageMimeType: z.string().max(100).optional(),
           budgetMin: z.number().int().min(0).optional(),
           budgetMax: z.number().int().min(0).optional(),
           timeline: z.string().max(100).optional(),
           notes: z.string().max(2000).optional(),
-          /** JSON-stringified ScrapedProduct from the URL scraper */
           scrapedDetails: z.string().max(10_000).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
         let imageUrl = input.imageUrl;
         if (input.imageBase64) {
-          // User uploaded a file — store it to S3
           const buffer = Buffer.from(input.imageBase64, "base64");
           const ext = (input.imageMimeType || "image/jpeg").split("/")[1] || "jpg";
           const { url } = await storagePut(
@@ -288,11 +280,9 @@ export const appRouter = router({
           );
           imageUrl = url;
         } else if (imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
-          // External URL from URL-paste mode — re-host to our S3 so it always displays
           console.log("[requests.create] Re-hosting external image:", imageUrl.slice(0, 80));
           try {
             const rehosted = await reHostImageForRequest(imageUrl);
-            console.log("[requests.create] Re-host result:", rehosted ? rehosted.slice(0, 80) : "null (fallback to external)");
             if (rehosted) imageUrl = rehosted;
           } catch (err) {
             console.error("[requests.create] Image re-host threw:", (err as Error)?.message);
@@ -311,7 +301,6 @@ export const appRouter = router({
         });
         const request = await db.getRequestById(id);
         const buyer = await db.getAccountById(ctx.account.accountId);
-        // Real-time: notify jewellers in this category instantly
         emitNewRequest(input.category, {
           ...request,
           buyerName: buyer?.name ?? "Buyer",
@@ -330,7 +319,6 @@ export const appRouter = router({
       return withCounts;
     }),
 
-    /** Single lead detail for jeweller — verifies the lead is in their categories */
     getLeadById: jewellerProcedure
       .input(z.object({ id: z.number().int().positive() }))
       .query(async ({ ctx, input }) => {
@@ -345,14 +333,28 @@ export const appRouter = router({
         }
         const buyer = await db.getAccountById(request.buyerId);
         const alreadyQuoted = await db.hasJewellerQuoted(request.id, ctx.account.accountId);
+        // If already quoted, fetch the quote to check if accepted + get thread
+        let myQuote: { id: number; status: string; totalPrice: number } | null = null;
+        let myThreadId: number | null = null;
+        if (alreadyQuoted) {
+          const q = await db.getJewellerQuoteForRequest(request.id, ctx.account.accountId);
+          if (q) {
+            myQuote = { id: q.id, status: q.status, totalPrice: q.totalPrice };
+            if (q.status === "accepted") {
+              const thread = await db.getChatThreadByQuote(q.id);
+              myThreadId = thread?.id ?? null;
+            }
+          }
+        }
         return {
           ...request,
           buyerName: buyer?.name ?? "Buyer",
           alreadyQuoted,
+          myQuote,
+          myThreadId,
         };
       }),
 
-    /** Lead feed for the logged-in jeweller, filtered by their categories. */
     leads: jewellerProcedure.query(async ({ ctx }) => {
       const jeweller = await db.getAccountById(ctx.account.accountId);
       const categories = (jeweller?.categories?.split(",") ?? []).filter(c =>
@@ -381,6 +383,8 @@ export const appRouter = router({
           makingCharges: z.number().int().min(0).optional(),
           totalPrice: z.number().int().positive(),
           message: z.string().max(2000).optional(),
+          /** One pre-acceptance message shown to buyer before they accept/dismiss */
+          preMessage: z.string().max(500).optional(),
           goldPurity: z.enum(["9kt", "14kt", "18kt"]).default("18kt"),
           goldPricePerGram: z.number().min(0).optional(),
         })
@@ -389,6 +393,20 @@ export const appRouter = router({
         const request = await db.getRequestById(input.requestId);
         if (!request) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Request not found" });
+        }
+        // Block quoting on paused or closed requests
+        if (request.status === "paused" || request.status === "closed") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "This request is no longer accepting quotes.",
+          });
+        }
+        // Enforce 5-slot limit
+        if ((request.activeQuoteCount ?? 0) >= 5) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "This request has reached its maximum of 5 quotes.",
+          });
         }
         const already = await db.hasJewellerQuoted(input.requestId, ctx.account.accountId);
         if (already) {
@@ -405,15 +423,19 @@ export const appRouter = router({
           makingCharges: input.makingCharges,
           totalPrice: input.totalPrice,
           message: input.message,
+          preMessage: input.preMessage,
           goldPurity: input.goldPurity,
           goldPricePerGram: input.goldPricePerGram?.toFixed(2),
         });
-        if (request.status === "open") {
-          await db.updateRequestStatus(request.id, "quoted");
+        // Increment slot count (may pause request if it hits 5)
+        await db.adjustActiveQuoteCount(input.requestId, 1);
+        // Ensure status is at least "quoted"
+        const updatedRequest = await db.getRequestById(input.requestId);
+        if (updatedRequest?.status === "open") {
+          await db.updateRequestStatus(input.requestId, "quoted");
         }
         const quote = await db.getQuoteById(id);
         const jeweller = await db.getAccountById(ctx.account.accountId);
-        // Real-time: notify the buyer instantly
         emitNewQuote(request.buyerId, {
           ...quote,
           jewellerName: jeweller?.name,
@@ -445,6 +467,12 @@ export const appRouter = router({
       return db.getQuotesByJeweller(ctx.account.accountId);
     }),
 
+    /**
+     * Buyer accepts or dismisses a quote.
+     * - Accept: opens a chat thread between buyer and jeweller.
+     *   Request is NOT paused on accept (only paused when all 5 slots fill).
+     * - Dismiss: frees the slot; request may reappear in feed if it was paused.
+     */
     setStatus: buyerProcedure
       .input(
         z.object({
@@ -461,34 +489,430 @@ export const appRouter = router({
         if (!request || request.buyerId !== ctx.account.accountId) {
           throw new TRPCError({ code: "FORBIDDEN", message: "Not your quote" });
         }
-        await db.updateQuoteStatus(input.quoteId, input.status);
-        if (input.status === "accepted") {
-          await db.updateRequestStatus(request.id, "closed");
+        if (quote.status !== "pending") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This quote has already been actioned.",
+          });
         }
-        // Real-time: notify the jeweller of the status change
+
+        await db.updateQuoteStatus(input.quoteId, input.status);
+
+        let threadId: number | undefined;
+
+        if (input.status === "accepted") {
+          // Open a chat thread — request stays open for other jewellers
+          threadId = await db.createChatThread({
+            requestId: request.id,
+            buyerId: ctx.account.accountId,
+            jewellerId: quote.jewellerId,
+            quoteId: quote.id,
+          });
+          // Post a system message to mark thread opening
+          await db.createMessage({
+            threadId,
+            senderId: ctx.account.accountId,
+            senderRole: "system",
+            content: "Chat unlocked — you can now discuss the details.",
+            type: "system",
+          });
+        } else {
+          // Dismissed: free the slot
+          await db.adjustActiveQuoteCount(request.id, -1);
+        }
+
         emitQuoteStatus(quote.jewellerId, {
           quoteId: quote.id,
           requestTitle: request.title,
           status: input.status,
+          threadId,
+        });
+
+        return { success: true, threadId } as const;
+      }),
+  }),
+
+  // --- Chat Threads -----------------------------------------------------------
+  chat: router({
+    /** Get all threads for the current buyer. */
+    myThreads: buyerProcedure.query(async ({ ctx }) => {
+      return db.getChatThreadsForBuyer(ctx.account.accountId);
+    }),
+
+    /** Get all threads for the current jeweller. */
+    jewellersThreads: jewellerProcedure.query(async ({ ctx }) => {
+      return db.getChatThreadsForJeweller(ctx.account.accountId);
+    }),
+
+    /** Get a single thread with its messages and the associated quote. */
+    getThread: accountProcedure
+      .input(z.object({ threadId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        // Only buyer or jeweller of this thread can access it
+        if (
+          thread.buyerId !== ctx.account.accountId &&
+          thread.jewellerId !== ctx.account.accountId &&
+          ctx.account.role !== "admin"
+        ) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+        }
+        const [msgs, quote, request] = await Promise.all([
+          db.getMessagesByThread(input.threadId),
+          db.getQuoteById(thread.quoteId),
+          db.getRequestById(thread.requestId),
+        ]);
+        const buyer = await db.getAccountById(thread.buyerId);
+        const jeweller = await db.getAccountById(thread.jewellerId);
+        // Get latest accepted requote if any
+        const allRequotes = await db.getRequotesByThread(input.threadId);
+        const activeRequote = allRequotes.find(r => r.status === "pending") ?? null;
+        const acceptedRequote = allRequotes.find(r => r.status === "accepted") ?? null;
+        return {
+          thread,
+          messages: msgs,
+          quote,
+          request,
+          buyer: buyer ? { id: buyer.id, name: buyer.name } : null,
+          jeweller: jeweller
+            ? {
+                id: jeweller.id,
+                name: jeweller.name,
+                businessName: jeweller.businessName,
+                city: jeweller.city,
+                rating: jeweller.rating,
+              }
+            : null,
+          activeRequote,
+          acceptedRequote,
+        };
+      }),
+
+    /** Send a text message in a thread. */
+    sendMessage: accountProcedure
+      .input(
+        z.object({
+          threadId: z.number().int().positive(),
+          content: z.string().min(1).max(5000),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        if (thread.status !== "open") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This chat is closed." });
+        }
+        if (
+          thread.buyerId !== ctx.account.accountId &&
+          thread.jewellerId !== ctx.account.accountId
+        ) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+        }
+        const senderRole = ctx.account.role === "buyer" ? "buyer" : "jeweller";
+        const msgId = await db.createMessage({
+          threadId: input.threadId,
+          senderId: ctx.account.accountId,
+          senderRole,
+          content: input.content,
+          type: "text",
+        });
+        const msg = await db.getMessageById(msgId);
+        // Real-time: notify the other party
+        const otherId =
+          ctx.account.accountId === thread.buyerId ? thread.jewellerId : thread.buyerId;
+        const otherRole =
+          ctx.account.accountId === thread.buyerId ? "jeweller" : "buyer";
+        emitNewMessage(otherId, otherRole, { threadId: input.threadId, message: msg });
+        return msg!;
+      }),
+
+    /**
+     * Close a thread.
+     * - Buyer closes → buyer_declined (counts as dismissing the quote)
+     * - Jeweller closes → jeweller_withdrawn
+     */
+    closeThread: accountProcedure
+      .input(z.object({ threadId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        if (thread.status !== "open") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Thread is already closed." });
+        }
+        if (
+          thread.buyerId !== ctx.account.accountId &&
+          thread.jewellerId !== ctx.account.accountId
+        ) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+        }
+
+        const isBuyer = ctx.account.accountId === thread.buyerId;
+        const newStatus = isBuyer ? "buyer_declined" : "jeweller_withdrawn";
+        await db.updateChatThreadStatus(input.threadId, newStatus);
+
+        // Post a system message
+        const systemMsg = isBuyer
+          ? "Buyer has closed this chat and declined the quote."
+          : "Jeweller has withdrawn from this conversation.";
+        await db.createMessage({
+          threadId: input.threadId,
+          senderId: ctx.account.accountId,
+          senderRole: "system",
+          content: systemMsg,
+          type: "system",
+        });
+
+        // If buyer closes → free the quote slot
+        if (isBuyer) {
+          await db.updateQuoteStatus(thread.quoteId, "dismissed");
+          await db.adjustActiveQuoteCount(thread.requestId, -1);
+        }
+
+        const otherId = isBuyer ? thread.jewellerId : thread.buyerId;
+        const otherRole = isBuyer ? "jeweller" : "buyer";
+        emitThreadStatusChange(otherId, otherRole, {
+          threadId: input.threadId,
+          status: newStatus,
+        });
+
+        return { success: true, status: newStatus } as const;
+      }),
+
+    /** Get thread for a specific quote (buyer checking if chat is open). */
+    threadByQuote: accountProcedure
+      .input(z.object({ quoteId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadByQuote(input.quoteId);
+        if (!thread) return null;
+        if (
+          thread.buyerId !== ctx.account.accountId &&
+          thread.jewellerId !== ctx.account.accountId &&
+          ctx.account.role !== "admin"
+        ) {
+          return null;
+        }
+        return thread;
+      }),
+  }),
+
+  // --- Requotes ---------------------------------------------------------------
+  requotes: router({
+    /**
+     * Jeweller sends an official requote inside a chat thread.
+     * Only one pending requote allowed per thread at a time.
+     */
+    send: jewellerProcedure
+      .input(
+        z.object({
+          threadId: z.number().int().positive(),
+          newPrice: z.number().int().positive(),
+          newGoldPurity: z.enum(["9kt", "14kt", "18kt"]).optional(),
+          newGoldWeightGrams: z.number().min(0).optional(),
+          newDiamondWeightCarats: z.number().min(0).optional(),
+          newMakingCharges: z.number().int().min(0).optional(),
+          reason: z.string().min(1).max(1000),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        if (thread.jewellerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        if (thread.status !== "open") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Thread is closed." });
+        }
+        // Only one pending requote at a time
+        const existing = await db.getPendingRequoteForThread(input.threadId);
+        if (existing) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "You already have a pending requote. Wait for the buyer to respond.",
+          });
+        }
+        const requoteId = await db.createRequote({
+          threadId: input.threadId,
+          jewellerId: ctx.account.accountId,
+          newPrice: input.newPrice,
+          newGoldPurity: input.newGoldPurity,
+          newGoldWeightGrams: input.newGoldWeightGrams?.toFixed(2),
+          newDiamondWeightCarats: input.newDiamondWeightCarats?.toFixed(2),
+          newMakingCharges: input.newMakingCharges,
+          reason: input.reason,
+        });
+        // Post a requote message in the thread
+        const msgId = await db.createMessage({
+          threadId: input.threadId,
+          senderId: ctx.account.accountId,
+          senderRole: "jeweller",
+          content: `Jeweller has sent a revised quote for ₹${input.newPrice.toLocaleString("en-IN")}.`,
+          requoteId,
+          type: "requote",
+        });
+        const msg = await db.getMessageById(msgId);
+        const requote = await db.getRequoteById(requoteId);
+        // Notify buyer
+        emitRequoteEvent(thread.buyerId, "buyer", {
+          threadId: input.threadId,
+          requote,
+          message: msg,
+        });
+        return requote!;
+      }),
+
+    /** Buyer accepts a requote — it becomes the new official quote. */
+    accept: buyerProcedure
+      .input(z.object({ requoteId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const requote = await db.getRequoteById(input.requoteId);
+        if (!requote) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Requote not found" });
+        }
+        const thread = await db.getChatThreadById(requote.threadId);
+        if (!thread || thread.buyerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        if (requote.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Requote already resolved." });
+        }
+        await db.updateRequoteStatus(input.requoteId, "accepted");
+        // Post system message
+        await db.createMessage({
+          threadId: requote.threadId,
+          senderId: ctx.account.accountId,
+          senderRole: "system",
+          content: `Buyer accepted the revised quote of ₹${requote.newPrice.toLocaleString("en-IN")}.`,
+          type: "system",
+        });
+        // Notify jeweller
+        emitRequoteEvent(thread.jewellerId, "jeweller", {
+          threadId: requote.threadId,
+          requoteId: input.requoteId,
+          status: "accepted",
+        });
+        return { success: true } as const;
+      }),
+
+    /** Buyer rejects a requote — original quote remains official. */
+    reject: buyerProcedure
+      .input(z.object({ requoteId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const requote = await db.getRequoteById(input.requoteId);
+        if (!requote) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Requote not found" });
+        }
+        const thread = await db.getChatThreadById(requote.threadId);
+        if (!thread || thread.buyerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        if (requote.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Requote already resolved." });
+        }
+        await db.updateRequoteStatus(input.requoteId, "rejected");
+        await db.createMessage({
+          threadId: requote.threadId,
+          senderId: ctx.account.accountId,
+          senderRole: "system",
+          content: "Buyer declined the revised quote. Original quote remains in effect.",
+          type: "system",
+        });
+        emitRequoteEvent(thread.jewellerId, "jeweller", {
+          threadId: requote.threadId,
+          requoteId: input.requoteId,
+          status: "rejected",
         });
         return { success: true } as const;
       }),
   }),
 
+  // --- Orders (placeholder — payment gateway to be wired later) ---------------
+  orders: router({
+    /** Buyer places an order from the official quote card in chat. */
+    placeOrder: buyerProcedure
+      .input(z.object({ threadId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread || thread.buyerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        if (thread.status !== "open") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Chat is closed." });
+        }
+        // Check if order already exists
+        const existing = await db.getOrderByThread(input.threadId);
+        if (existing) {
+          return existing;
+        }
+        // Determine final price: accepted requote or original quote
+        const allRequotes = await db.getRequotesByThread(input.threadId);
+        const acceptedRequote = allRequotes.find(r => r.status === "accepted");
+        const quote = await db.getQuoteById(thread.quoteId);
+        if (!quote) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Quote not found" });
+        }
+        const amount = acceptedRequote ? acceptedRequote.newPrice : quote.totalPrice;
+        const orderId = await db.createOrder({
+          threadId: input.threadId,
+          quoteId: thread.quoteId,
+          buyerId: ctx.account.accountId,
+          jewellerId: thread.jewellerId,
+          amount,
+          platformFeePercent: "5.00",
+        });
+        const order = await db.getOrderById(orderId);
+        return order!;
+      }),
+
+    myOrders: buyerProcedure.query(async ({ ctx }) => {
+      return db.getOrdersForBuyer(ctx.account.accountId);
+    }),
+  }),
+
+  // --- Reports ----------------------------------------------------------------
+  reports: router({
+    /** Buyer reports a jeweller for misconduct. */
+    file: buyerProcedure
+      .input(
+        z.object({
+          threadId: z.number().int().positive(),
+          reason: z.string().min(10).max(2000),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread || thread.buyerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your thread" });
+        }
+        const reportId = await db.createReport({
+          reporterId: ctx.account.accountId,
+          reportedJewellerId: thread.jewellerId,
+          threadId: input.threadId,
+          reason: input.reason,
+        });
+        return { success: true, reportId } as const;
+      }),
+  }),
+
   // --- Gold Price ---------------------------------------------------------------
   goldPrice: router({
-    /** Get the latest gold price (all purities) */
     current: publicProcedure.query(async () => {
       const price = await getLatestGoldPrice();
       return price;
     }),
 
-    /** Get last 30 gold price snapshots for history/chart */
     history: publicProcedure.query(async () => {
       return getGoldPriceHistory(30);
     }),
 
-    /** Admin: manually trigger a gold price refresh */
     refresh: vvAdminProcedure.mutation(async () => {
       const result = await fetchAndStoreGoldPrice();
       return result;
@@ -507,6 +931,69 @@ export const appRouter = router({
     }),
     requests: vvAdminProcedure.query(() => db.getAllRequestsAdmin()),
     quotes: vvAdminProcedure.query(() => db.getAllQuotesAdmin()),
+
+    /** All chat threads (admin oversight). */
+    chats: vvAdminProcedure.query(async () => {
+      const db2 = await import("./db");
+      return db2.getAllChatThreadsAdmin();
+    }),
+
+    /** Pending reports for admin review. */
+    pendingReports: vvAdminProcedure.query(() => db.getPendingReports()),
+
+    /** All reports (full history). */
+    allReports: vvAdminProcedure.query(() => db.getAllReports()),
+
+    /** Resolve a report with admin notes. */
+    resolveReport: vvAdminProcedure
+      .input(
+        z.object({
+          reportId: z.number().int().positive(),
+          adminNotes: z.string().min(1).max(2000),
+        })
+      )
+      .mutation(async ({ input }) => {
+        await db.resolveReport(input.reportId, input.adminNotes);
+        return { success: true } as const;
+      }),
+
+    /** Jeweller incidents tracker. */
+    jewellersIncidents: vvAdminProcedure.query(() => db.getJewellerIncidents()),
+
+    /** Get full thread detail for admin (same as user getThread but no ownership check). */
+    getThread: vvAdminProcedure
+      .input(z.object({ threadId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const thread = await db.getChatThreadById(input.threadId);
+        if (!thread) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+        }
+        const [msgs, quote, request] = await Promise.all([
+          db.getMessagesByThread(input.threadId),
+          db.getQuoteById(thread.quoteId),
+          db.getRequestById(thread.requestId),
+        ]);
+        const buyer = await db.getAccountById(thread.buyerId);
+        const jeweller = await db.getAccountById(thread.jewellerId);
+        const allRequotes = await db.getRequotesByThread(input.threadId);
+        return {
+          thread,
+          messages: msgs,
+          quote,
+          request,
+          buyer: buyer ? { id: buyer.id, name: buyer.name, email: buyer.email } : null,
+          jeweller: jeweller
+            ? {
+                id: jeweller.id,
+                name: jeweller.name,
+                businessName: jeweller.businessName,
+                city: jeweller.city,
+                email: jeweller.email,
+              }
+            : null,
+          requotes: allRequotes,
+        };
+      }),
   }),
 });
 

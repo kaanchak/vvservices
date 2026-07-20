@@ -7,8 +7,8 @@ let io: SocketIOServer | null = null;
 /**
  * Room layout:
  *  - `jewellers:{category}`  → jewellers subscribed per category (lead feed)
- *  - `buyer:{accountId}`     → each buyer's private room (quote updates)
- *  - `jeweller:{accountId}`  → each jeweller's private room (quote status updates)
+ *  - `buyer:{accountId}`     → each buyer's private room (quote updates, messages)
+ *  - `jeweller:{accountId}`  → each jeweller's private room (quote status, messages)
  *  - `admins`                → admin dashboard live counters
  */
 export function initRealtime(server: HttpServer): SocketIOServer {
@@ -67,4 +67,32 @@ export function emitNewQuote(buyerId: number, payload: unknown): void {
 export function emitQuoteStatus(jewellerId: number, payload: unknown): void {
   io?.to(`jeweller:${jewellerId}`).emit("quote-status", payload);
   io?.to("admins").emit("admin-update", { type: "quote-status" });
+}
+
+/** Emit a new chat message to the recipient. */
+export function emitNewMessage(
+  recipientId: number,
+  recipientRole: "buyer" | "jeweller",
+  payload: unknown
+): void {
+  io?.to(`${recipientRole}:${recipientId}`).emit("new-message", payload);
+}
+
+/** Emit a requote event (sent, accepted, rejected) to the recipient. */
+export function emitRequoteEvent(
+  recipientId: number,
+  recipientRole: "buyer" | "jeweller",
+  payload: unknown
+): void {
+  io?.to(`${recipientRole}:${recipientId}`).emit("requote-event", payload);
+}
+
+/** Emit a thread status change (closed, declined, withdrawn) to the recipient. */
+export function emitThreadStatusChange(
+  recipientId: number,
+  recipientRole: "buyer" | "jeweller",
+  payload: unknown
+): void {
+  io?.to(`${recipientRole}:${recipientId}`).emit("thread-status", payload);
+  io?.to("admins").emit("admin-update", { type: "thread-status" });
 }

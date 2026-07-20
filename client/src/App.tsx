@@ -1,9 +1,13 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import AdminPanel from "@/pages/AdminPanel";
+import AdminChatView from "@/pages/AdminChatView";
+import BuyerChats from "@/pages/BuyerChats";
 import BuyerDashboard from "@/pages/BuyerDashboard";
 import BuyerQuotes from "@/pages/BuyerQuotes";
+import ChatThreadPage from "@/pages/ChatThread";
 import Home from "@/pages/Home";
+import JewellerChats from "@/pages/JewellerChats";
 import JewellerDashboard from "@/pages/JewellerDashboard";
 import JewellerLeadDetail from "@/pages/JewellerLeadDetail";
 import JewellerQuotes from "@/pages/JewellerQuotes";
@@ -27,14 +31,25 @@ function Router() {
       <Route path={"/app/requests/:id"}>
         {params => <BuyerQuotes requestId={parseInt(params.id)} />}
       </Route>
+      <Route path={"/app/chats"} component={BuyerChats} />
+      <Route path={"/app/chat/:id"}>
+        {params => <ChatThreadPage threadId={parseInt(params.id)} />}
+      </Route>
       {/* Jeweller area */}
       <Route path={"/jeweller"} component={JewellerDashboard} />
       <Route path={"/jeweller/quotes"} component={JewellerQuotes} />
       <Route path={"/jeweller/leads/:id"}>
         {params => <JewellerLeadDetail id={parseInt(params.id)} />}
       </Route>
+      <Route path={"/jeweller/chats"} component={JewellerChats} />
+      <Route path={"/jeweller/chat/:id"}>
+        {params => <ChatThreadPage threadId={parseInt(params.id)} />}
+      </Route>
       {/* Admin area */}
       <Route path={"/admin"} component={AdminPanel} />
+      <Route path={"/admin/chat/:id"}>
+        {params => <AdminChatView threadId={parseInt(params.id)} />}
+      </Route>
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

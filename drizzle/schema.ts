@@ -71,7 +71,17 @@ export const requests = mysqlTable("requests", {
   notes: text("notes"),
   /** JSON blob of ScrapedProduct data extracted from imageUrl when it is a web URL */
   scrapedDetails: text("scrapedDetails"),
-  status: mysqlEnum("status", ["open", "quoted", "closed"]).default("open").notNull(),
+  /**
+   * open     = accepting quotes (slots < 5)
+   * paused   = all 5 quote slots filled (hidden from jeweller feed)
+   * closed   = buyer has finalised (order placed or all quotes dismissed)
+   */
+  status: mysqlEnum("status", ["open", "quoted", "paused", "closed"]).default("open").notNull(),
+  /**
+   * Number of currently active (non-dismissed) quotes.
+   * Request is hidden from feed when this reaches 5.
+   */
+  activeQuoteCount: int("activeQuoteCount").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -88,6 +98,11 @@ export const quotes = mysqlTable("quotes", {
   makingCharges: int("makingCharges"),
   totalPrice: int("totalPrice").notNull(),
   message: text("message"),
+  /**
+   * One pre-acceptance message the jeweller can send with their quote.
+   * Visible to buyer before they accept/dismiss. Cannot be changed after submission.
+   */
+  preMessage: text("preMessage"),
   /** Gold purity used for this quote: 9kt = 9/24, 14kt = 14/24, 18kt = 18/24 */
   goldPurity: mysqlEnum("goldPurity", ["9kt", "14kt", "18kt"]).default("18kt"),
   /** Gold price per gram (INR) at the time of quoting, purity-adjusted */
@@ -100,6 +115,146 @@ export const quotes = mysqlTable("quotes", {
 
 export type Quote = typeof quotes.$inferSelect;
 export type InsertQuote = typeof quotes.$inferInsert;
+
+/**
+ * Chat threads between a buyer and a jeweller, opened when buyer accepts a quote.
+ * Each accepted quote can have at most one thread.
+ */
+export const chatThreads = mysqlTable("chatThreads", {
+  id: int("id").autoincrement().primaryKey(),
+  requestId: int("requestId").notNull(),
+  buyerId: int("buyerId").notNull(),
+  jewellerId: int("jewellerId").notNull(),
+  quoteId: int("quoteId").notNull(),
+  /**
+   * open               = active conversation
+   * buyer_declined     = buyer closed the chat (counts as declining the quote)
+   * jeweller_withdrawn = jeweller closed the chat (withdrawing their quote)
+   */
+  status: mysqlEnum("status", ["open", "buyer_declined", "jeweller_withdrawn"])
+    .default("open")
+    .notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  closedAt: timestamp("closedAt"),
+});
+
+export type ChatThread = typeof chatThreads.$inferSelect;
+export type InsertChatThread = typeof chatThreads.$inferInsert;
+
+/**
+ * Messages inside a chat thread.
+ * type = "text"    → plain message
+ * type = "requote" → structured requote card (references requotes table)
+ * type = "system"  → system events (thread opened, closed, requote accepted, etc.)
+ */
+export const messages = mysqlTable("messages", {
+  id: int("id").autoincrement().primaryKey(),
+  threadId: int("threadId").notNull(),
+  senderId: int("senderId").notNull(),
+  senderRole: mysqlEnum("senderRole", ["buyer", "jeweller", "system"]).notNull(),
+  content: text("content").notNull(),
+  /** For requote messages, stores the requote id as a string */
+  requoteId: int("requoteId"),
+  type: mysqlEnum("type", ["text", "requote", "system"]).default("text").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Message = typeof messages.$inferSelect;
+export type InsertMessage = typeof messages.$inferInsert;
+
+/**
+ * Official requotes sent by jewellers inside a chat thread.
+ * Buyer must accept for the requote to become the new official quote.
+ * Jeweller cannot change the original quote without going through this flow.
+ */
+export const requotes = mysqlTable("requotes", {
+  id: int("id").autoincrement().primaryKey(),
+  threadId: int("threadId").notNull(),
+  jewellerId: int("jewellerId").notNull(),
+  /** New total price being proposed */
+  newPrice: int("newPrice").notNull(),
+  /** New gold purity (if changed) */
+  newGoldPurity: mysqlEnum("newGoldPurity", ["9kt", "14kt", "18kt"]),
+  /** New gold weight in grams (if changed) */
+  newGoldWeightGrams: decimal("newGoldWeightGrams", { precision: 8, scale: 2 }),
+  /** New diamond weight in carats (if changed) */
+  newDiamondWeightCarats: decimal("newDiamondWeightCarats", { precision: 8, scale: 2 }),
+  /** New making charges (if changed) */
+  newMakingCharges: int("newMakingCharges"),
+  /** Jeweller's reason for the requote */
+  reason: text("reason").notNull(),
+  /**
+   * pending  = waiting for buyer response
+   * accepted = buyer accepted → becomes new official quote
+   * rejected = buyer rejected → original quote still stands
+   */
+  status: mysqlEnum("status", ["pending", "accepted", "rejected"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  resolvedAt: timestamp("resolvedAt"),
+});
+
+export type Requote = typeof requotes.$inferSelect;
+export type InsertRequote = typeof requotes.$inferInsert;
+
+/**
+ * Orders created when buyer clicks "Add to Cart" / "Place Order" on an official quote.
+ * Payment gateway to be wired in a future session.
+ * Platform takes an escrow commission (platformFeePercent) on each transaction.
+ */
+export const orders = mysqlTable("orders", {
+  id: int("id").autoincrement().primaryKey(),
+  threadId: int("threadId").notNull(),
+  quoteId: int("quoteId").notNull(),
+  buyerId: int("buyerId").notNull(),
+  jewellerId: int("jewellerId").notNull(),
+  /** Final agreed price (from original quote or accepted requote) */
+  amount: int("amount").notNull(),
+  /** Platform commission percentage (e.g. 5 = 5%) */
+  platformFeePercent: decimal("platformFeePercent", { precision: 5, scale: 2 }).default("5.00").notNull(),
+  /**
+   * pending_payment = order created, awaiting payment
+   * paid            = payment received (escrow held)
+   * fulfilled       = jeweller shipped, buyer confirmed
+   * cancelled       = order cancelled
+   */
+  status: mysqlEnum("status", ["pending_payment", "paid", "fulfilled", "cancelled"])
+    .default("pending_payment")
+    .notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Order = typeof orders.$inferSelect;
+export type InsertOrder = typeof orders.$inferInsert;
+
+/**
+ * Reports filed by buyers against jewellers for misconduct
+ * (e.g. changing quote without buyer's request, unprofessional behaviour).
+ * Admin reviews and acts as tribunal based on incident count.
+ */
+export const jewelleryReports = mysqlTable("jewelleryReports", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Buyer who filed the report */
+  reporterId: int("reporterId").notNull(),
+  /** Jeweller being reported */
+  reportedJewellerId: int("reportedJewellerId").notNull(),
+  /** Chat thread where the incident occurred */
+  threadId: int("threadId").notNull(),
+  /** Reason for the report */
+  reason: text("reason").notNull(),
+  /**
+   * pending  = awaiting admin review
+   * reviewed = admin has reviewed and taken action
+   */
+  status: mysqlEnum("status", ["pending", "reviewed"]).default("pending").notNull(),
+  /** Admin notes after review */
+  adminNotes: text("adminNotes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewedAt"),
+});
+
+export type JewelleryReport = typeof jewelleryReports.$inferSelect;
+export type InsertJewelleryReport = typeof jewelleryReports.$inferInsert;
 
 /** Landing page waitlist signups. */
 export const waitlist = mysqlTable("waitlist", {

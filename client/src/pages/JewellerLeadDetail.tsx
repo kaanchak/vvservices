@@ -104,10 +104,14 @@ function QuoteForm({
   isClosed,
   onSuccess,
   scraped,
+  myQuote,
+  myThreadId,
 }: {
   requestId: number;
   alreadyQuoted: boolean;
   isClosed: boolean;
+  myQuote?: { id: number; status: string; totalPrice: number } | null;
+  myThreadId?: number | null;
   onSuccess: () => void;
   scraped: ScrapedProduct | null;
 }) {
@@ -136,6 +140,7 @@ function QuoteForm({
   const [makingCharges, setMakingCharges] = useState("");
   const [diamondRate, setDiamondRate] = useState(String(DEFAULT_DIAMOND_RATE));
   const [message, setMessage] = useState("");
+  const [preMessage, setPreMessage] = useState("");
 
   // When purity changes, update the displayed gold rate (read-only, derived from live price)
   const goldRateDisplay = liveGoldRateForPurity
@@ -161,13 +166,44 @@ function QuoteForm({
   });
 
   if (alreadyQuoted) {
+    const isAccepted = myQuote?.status === "accepted";
     return (
-      <div className="flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 p-4">
-        <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-green-600" />
-        <div>
-          <p className="font-semibold text-green-800">Quote submitted</p>
-          <p className="text-sm text-green-700">
-            Your quote has been sent to the buyer. You'll be notified when they respond.
+      <div className="space-y-3">
+        {isAccepted && myThreadId ? (
+          <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
+            <div className="flex items-center gap-3 mb-3">
+              <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-emerald-600" />
+              <div>
+                <p className="font-semibold text-emerald-800">Buyer accepted your quote!</p>
+                <p className="text-sm text-emerald-700">
+                  Chat is now unlocked. Discuss details and finalise the order.
+                </p>
+              </div>
+            </div>
+            <Button
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
+              onClick={() => window.location.href = `/jeweller/chat/${myThreadId}`}
+            >
+              <RefreshCw className="h-4 w-4" /> Open Chat with Buyer
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 p-4">
+            <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-green-600" />
+            <div>
+              <p className="font-semibold text-green-800">Quote submitted</p>
+              <p className="text-sm text-green-700">
+                Your quote has been sent to the buyer. You'll be notified when they respond.
+              </p>
+            </div>
+          </div>
+        )}
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
+          <Info className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-800">
+            <strong>Quote is locked.</strong> You cannot change your quote after submission.
+            If you need to revise it, use the <strong>"Send Requote"</strong> button inside the chat
+            — the buyer must accept the revision for it to take effect.
           </p>
         </div>
       </div>
@@ -196,6 +232,7 @@ function QuoteForm({
           makingCharges: makingCharges ? parseInt(makingCharges) : undefined,
           totalPrice,
           message: message || undefined,
+          preMessage: preMessage || undefined,
           goldPurity: purity,
           goldPricePerGram: liveGoldRateForPurity ?? undefined,
         });
@@ -348,10 +385,33 @@ function QuoteForm({
         </div>
       </div>
 
+      {/* ── Pre-acceptance message ── */}
+      <div className="space-y-2">
+        <Label htmlFor="preMessage" className="flex items-center gap-1.5">
+          <StickyNote className="h-3.5 w-3.5 text-[#D4AF37]" />
+          Pre-acceptance message
+          <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+            Shown before buyer accepts
+          </span>
+        </Label>
+        <Textarea
+          id="preMessage"
+          rows={2}
+          maxLength={500}
+          placeholder="Introduce yourself — e.g. 'We specialise in bridal sets and offer BIS hallmarked jewellery with 30-day returns.'"
+          value={preMessage}
+          onChange={e => setPreMessage(e.target.value)}
+        />
+        <p className="text-[10px] text-neutral-400">
+          This message is visible to the buyer alongside your quote, before they accept or dismiss it.
+          Max 500 characters.
+        </p>
+      </div>
+
       <div className="space-y-2">
         <Label htmlFor="message" className="flex items-center gap-1.5">
           <StickyNote className="h-3.5 w-3.5 text-[#D4AF37]" />
-          Message to buyer
+          Internal notes (optional)
         </Label>
         <Textarea
           id="message"
@@ -604,6 +664,8 @@ export default function JewellerLeadDetail({ id }: { id: number }) {
                   isClosed={lead.status === "closed"}
                   onSuccess={() => navigate("/jeweller")}
                   scraped={scraped}
+                  myQuote={(lead as any).myQuote}
+                  myThreadId={(lead as any).myThreadId}
                 />
               </CardContent>
             </Card>

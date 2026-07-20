@@ -29,6 +29,13 @@
       "when": 1784488900430,
       "tag": "0003_young_rictor",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1784536922835,
+      "tag": "0004_legal_pride",
+      "breakpoints": true
     }
   ]
 }

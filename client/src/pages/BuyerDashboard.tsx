@@ -46,6 +46,7 @@ import { Link } from "wouter";
 export const buyerNav = [
   { href: "/app", label: "My Requests" },
   { href: "/app/quotes", label: "Quotes" },
+  { href: "/app/chats", label: "Chats" },
 ];
 
 // ─── types ──────────────────────────────────────────────────────────────────

@@ -53,3 +53,53 @@
 ## Robustness
 - [x] Add loading/empty state for Home page gold price ticker
 - [x] Trigger initial gold price fetch on server startup (so first run is populated)
+
+## Phase 2 — Messaging, Quote Slots, Requote, Reports, Admin
+
+### DB Schema
+- [x] Add `chatThreads` table (id, requestId, buyerId, jewellerId, quoteId, status: open/closed/buyer_declined/jeweller_withdrawn)
+- [x] Add `messages` table (id, threadId, senderId, senderRole, content, type: text/requote, createdAt)
+- [x] Add `requotes` table (id, threadId, jewellerId, price, specs, reason, status: pending/accepted/rejected, createdAt)
+- [x] Add `orders` table (id, threadId, quoteId, buyerId, jewellerId, amount, platformFeePercent, status: pending_payment/paid/fulfilled, createdAt)
+- [x] Add `jewelleryReports` table (id, reporterId, reportedJewellerId, threadId, reason, status: pending/reviewed, adminNotes, createdAt)
+- [x] Update `quotes` table: add `preMessage` text field
+- [x] Update `requests` table: add `activeQuoteCount` int (0-5), update status enum to include `paused`
+
+### Backend
+- [x] Quote slot logic: max 5 per request, slot freed on dismiss, request pauses at 5 (not on accept)
+- [x] tRPC: createThread (on quote accept), sendMessage, getThread, getMessages
+- [x] tRPC: closeThread (buyer = decline, jeweller = withdraw)
+- [x] tRPC: sendRequote, acceptRequote, rejectRequote
+- [x] tRPC: reportJeweller, getReports (admin), resolveReport (admin)
+- [x] tRPC: getAdminChats, getJewellerIncidents
+
+### Frontend — Buyer
+- [x] Buyer request detail: show quote cards with Accept/Dismiss buttons + slot counter
+- [x] Buyer chat page: full chat UI with official quote card at top
+- [x] Official quote card: shows price, purity, weight, delivery time + Add to Cart (placeholder)
+- [x] Requote card in chat: Accept/Reject buttons, shows new specs vs original
+- [x] Close chat button (buyer = decline)
+- [x] Report jeweller button in chat
+
+### Frontend — Jeweller
+- [x] Jeweller quote form: add pre-acceptance message field + warning about quote lock
+- [x] Jeweller lead detail: show accepted quote with chat unlock indicator
+- [x] Jeweller chat page: full chat UI
+- [x] Send Requote button in chat: structured form (price, specs, reason)
+- [x] Close chat button (jeweller = withdraw)
+
+### Admin
+- [x] Admin chats panel: list all active chat threads
+- [x] Admin reported chats panel: flagged threads with full history
+- [x] Admin jeweller incidents tracker: report count per jeweller + warn/suspend controls
+
+### Real-time
+- [x] Socket.io: emit new messages to buyer:{id} and jeweller:{id} rooms
+- [x] Socket.io: emit requote events to buyer:{id} room
+- [x] Socket.io: emit thread status changes to both parties
+
+### Tests
+- [x] Tests for quote slot logic (5 slot cap, slot freeing, pause at 5)
+- [x] Tests for chat thread creation and message sending
+- [x] Tests for requote flow (send, accept, reject)
+- [x] Tests for report system

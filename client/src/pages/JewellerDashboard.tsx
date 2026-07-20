@@ -24,6 +24,7 @@ import { Link } from "wouter";
 export const jewellerNav = [
   { href: "/jeweller", label: "Lead Feed" },
   { href: "/jeweller/quotes", label: "My Quotes" },
+  { href: "/jeweller/chats", label: "Chats" },
 ];
 
 interface ScrapedProduct {

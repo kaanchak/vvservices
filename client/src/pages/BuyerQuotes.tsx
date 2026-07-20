@@ -2,11 +2,44 @@ import AppShell from "@/components/AppShell";
 import { CategoryBadge, StatusBadge, formatINR } from "@/components/Brand";
 import { buyerNav } from "@/pages/BuyerDashboard";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useAccount } from "@/hooks/useAccount";
 import { useSocket } from "@/hooks/useSocket";
 import { trpc } from "@/lib/trpc";
-import { Check, Gem, MapPin, Star, X } from "lucide-react";
+import { Check, Gem, MapPin, MessageSquare, Star, X } from "lucide-react";
 import { toast } from "sonner";
+import { useLocation } from "wouter";
+
+// ─── Quote Slot Indicator ─────────────────────────────────────────────────────
+
+function QuoteSlotIndicator({ count }: { count: number }) {
+  const filled = Math.min(count, 5);
+  const isPaused = count >= 5;
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-xs text-neutral-400">Quotes:</span>
+      <div className="flex gap-0.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div
+            key={i}
+            className={`h-2 w-4 rounded-sm transition-colors ${
+              i < filled
+                ? isPaused
+                  ? "bg-amber-400"
+                  : "bg-emerald-400"
+                : "bg-neutral-200"
+            }`}
+          />
+        ))}
+      </div>
+      <span className={`text-xs font-medium ${isPaused ? "text-amber-600" : "text-neutral-500"}`}>
+        {filled}/5 {isPaused && "· Full"}
+      </span>
+    </div>
+  );
+}
+
+// ─── Quote Card ───────────────────────────────────────────────────────────────
 
 function QuoteCard({
   quote,
@@ -17,6 +50,7 @@ function QuoteCard({
   requestTitle,
   onStatus,
   pending,
+  onOpenChat,
 }: {
   quote: {
     id: number;
@@ -25,6 +59,8 @@ function QuoteCard({
     makingCharges: number | null;
     totalPrice: number;
     message: string | null;
+    preMessage: string | null;
+    goldPurity: string | null;
     status: string;
     createdAt: Date;
   };
@@ -35,18 +71,23 @@ function QuoteCard({
   requestTitle?: string | null;
   onStatus: (quoteId: number, status: "accepted" | "dismissed") => void;
   pending: boolean;
+  onOpenChat: (quoteId: number) => void;
 }) {
   const displayName = businessName || jewellerName || "Jeweller";
+  const isAccepted = quote.status === "accepted";
+  const isDismissed = quote.status === "dismissed";
+
   return (
     <div
       className={`luxury-shadow rounded-2xl border bg-white p-6 transition-colors ${
-        quote.status === "accepted"
+        isAccepted
           ? "border-emerald-300 ring-1 ring-emerald-200"
-          : quote.status === "dismissed"
+          : isDismissed
             ? "border-neutral-200 opacity-60"
             : "border-[#D4AF37]/20"
       }`}
     >
+      {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-gold-gradient font-serif text-lg font-semibold text-[#1A1A1A]">
@@ -77,12 +118,26 @@ function QuoteCard({
         </p>
       )}
 
+      {/* Pre-acceptance message — shown on pending quotes */}
+      {quote.preMessage && quote.status === "pending" && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 mb-1">
+            Jeweller's introduction
+          </p>
+          <p className="text-sm leading-relaxed text-amber-900">"{quote.preMessage}"</p>
+        </div>
+      )}
+
+      {/* Specs grid */}
       <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-[#faf9f6] p-3.5 text-center">
         <div>
           <p className="text-xs text-neutral-500">Gold</p>
           <p className="text-sm font-semibold">
             {quote.goldWeightGrams ? `${quote.goldWeightGrams} g` : "—"}
           </p>
+          {quote.goldPurity && (
+            <p className="text-[10px] text-neutral-400">{quote.goldPurity.toUpperCase()}</p>
+          )}
         </div>
         <div>
           <p className="text-xs text-neutral-500">Diamonds</p>
@@ -96,6 +151,7 @@ function QuoteCard({
         </div>
       </div>
 
+      {/* Total price */}
       <div className="mt-4 flex items-baseline justify-between">
         <p className="text-sm text-neutral-500">Total price</p>
         <p className="font-serif text-3xl font-semibold text-[#8a6d1c]">
@@ -103,12 +159,14 @@ function QuoteCard({
         </p>
       </div>
 
+      {/* Internal notes */}
       {quote.message && (
         <p className="mt-3 rounded-lg border border-border bg-white p-3 text-sm leading-relaxed text-neutral-600">
           "{quote.message}"
         </p>
       )}
 
+      {/* Actions */}
       {quote.status === "pending" && (
         <div className="mt-5 flex gap-3">
           <Button
@@ -128,12 +186,25 @@ function QuoteCard({
           </Button>
         </div>
       )}
+
+      {/* Open Chat button for accepted quotes */}
+      {isAccepted && (
+        <Button
+          className="mt-4 w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+          onClick={() => onOpenChat(quote.id)}
+        >
+          <MessageSquare className="h-4 w-4" /> Open Chat
+        </Button>
+      )}
     </div>
   );
 }
 
+// ─── BuyerQuotes Page ─────────────────────────────────────────────────────────
+
 export default function BuyerQuotes({ requestId }: { requestId?: number }) {
   const { account } = useAccount();
+  const [, navigate] = useLocation();
   const utils = trpc.useUtils();
 
   const allQuotes = trpc.quotes.forBuyer.useQuery(undefined, {
@@ -145,17 +216,29 @@ export default function BuyerQuotes({ requestId }: { requestId?: number }) {
   );
 
   const setStatus = trpc.quotes.setStatus.useMutation({
-    onSuccess: (_, vars) => {
+    onSuccess: (data, vars) => {
       toast.success(
         vars.status === "accepted"
-          ? "Quote accepted! The jeweller has been notified."
+          ? "Quote accepted! Chat is now open."
           : "Quote dismissed."
       );
       utils.quotes.invalidate();
       utils.requests.mine.invalidate();
+      // Navigate to chat if accepted and threadId returned
+      if (vars.status === "accepted" && data?.threadId) {
+        navigate(`/app/chat/${data.threadId}`);
+      }
     },
     onError: e => toast.error(e.message),
   });
+
+  // For "Open Chat" on already-accepted quotes, look up the thread
+  const threadByQuote = trpc.chat.threadByQuote.useQuery;
+
+  const handleOpenChat = async (quoteId: number) => {
+    // We navigate to chats page; the thread will be listed there
+    navigate("/app/chats");
+  };
 
   useSocket({
     "new-quote": payload => {
@@ -170,6 +253,17 @@ export default function BuyerQuotes({ requestId }: { requestId?: number }) {
 
   const isLoading = requestId ? requestQuotes.isLoading : allQuotes.isLoading;
   const quotes = requestId ? requestQuotes.data : allQuotes.data;
+
+  // Count active (non-dismissed) quotes per request for slot indicator
+  const slotMap: Record<number, number> = {};
+  if (quotes) {
+    for (const row of quotes as any[]) {
+      const rId = row.quote?.requestId;
+      if (rId && row.quote?.status !== "dismissed") {
+        slotMap[rId] = (slotMap[rId] ?? 0) + 1;
+      }
+    }
+  }
 
   return (
     <AppShell nav={buyerNav} requiredRole="buyer" loginPath="/login">
@@ -198,21 +292,36 @@ export default function BuyerQuotes({ requestId }: { requestId?: number }) {
           </p>
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {quotes.map((row: any) => (
-            <QuoteCard
-              key={row.quote.id}
-              quote={row.quote}
-              jewellerName={row.jewellerName}
-              businessName={row.businessName}
-              rating={row.rating}
-              city={row.city}
-              requestTitle={requestId ? undefined : row.requestTitle}
-              pending={setStatus.isPending}
-              onStatus={(quoteId, status) => setStatus.mutate({ quoteId, status })}
-            />
-          ))}
-        </div>
+        <>
+          {/* Slot indicator when viewing a specific request */}
+          {requestId && (
+            <div className="mb-4">
+              <QuoteSlotIndicator count={slotMap[requestId] ?? 0} />
+              {(slotMap[requestId] ?? 0) >= 5 && (
+                <p className="mt-1.5 text-xs text-amber-600">
+                  This request has reached 5 quotes and is hidden from the jeweller feed.
+                  Dismiss a quote to free a slot.
+                </p>
+              )}
+            </div>
+          )}
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {(quotes as any[]).map((row: any) => (
+              <QuoteCard
+                key={row.quote.id}
+                quote={row.quote}
+                jewellerName={row.jewellerName}
+                businessName={row.businessName}
+                rating={row.rating}
+                city={row.city}
+                requestTitle={requestId ? undefined : row.requestTitle}
+                pending={setStatus.isPending}
+                onStatus={(quoteId, status) => setStatus.mutate({ quoteId, status })}
+                onOpenChat={handleOpenChat}
+              />
+            ))}
+          </div>
+        </>
       )}
     </AppShell>
   );
