@@ -71,6 +71,10 @@ export const requests = mysqlTable("requests", {
   notes: text("notes"),
   /** JSON array of product image URLs (up to 5; first entry mirrors imageUrl) */
   imageUrls: text("imageUrls"),
+  /** Original scraped price in its source currency (e.g. "45600" for $45,600) */
+  originalPrice: varchar("originalPrice", { length: 64 }),
+  /** ISO 4217 currency code of the original scraped price, e.g. "USD", "INR" */
+  originalCurrency: varchar("originalCurrency", { length: 8 }),
   /** JSON blob of ScrapedProduct data extracted from imageUrl when it is a web URL */
   scrapedDetails: text("scrapedDetails"),
   /**
@@ -257,6 +261,22 @@ export const jewelleryReports = mysqlTable("jewelleryReports", {
 
 export type JewelleryReport = typeof jewelleryReports.$inferSelect;
 export type InsertJewelleryReport = typeof jewelleryReports.$inferInsert;
+
+/**
+ * Daily exchange rate snapshots (foreign currency → INR).
+ * Fetched once per day and cached here so all price conversions use a consistent rate.
+ */
+export const exchangeRates = mysqlTable("exchangeRates", {
+  id: int("id").autoincrement().primaryKey(),
+  /** ISO 4217 source currency code, e.g. "USD", "EUR", "GBP", "AED" */
+  fromCurrency: varchar("fromCurrency", { length: 8 }).notNull(),
+  /** Rate: 1 unit of fromCurrency = rateToInr INR */
+  rateToInr: decimal("rateToInr", { precision: 16, scale: 6 }).notNull(),
+  fetchedAt: timestamp("fetchedAt").defaultNow().notNull(),
+});
+
+export type ExchangeRate = typeof exchangeRates.$inferSelect;
+export type InsertExchangeRate = typeof exchangeRates.$inferInsert;
 
 /** Landing page waitlist signups. */
 export const waitlist = mysqlTable("waitlist", {

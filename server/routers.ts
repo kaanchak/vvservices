@@ -24,6 +24,7 @@ import {
 import { scrapeProductUrl, reHostImageForRequest } from "./scraper";
 import { storagePut } from "./storage";
 import { getLatestGoldPrice, fetchAndStoreGoldPrice, getGoldPriceHistory } from "./goldPrice";
+import { getLatestExchangeRates, convertToInr } from "./exchangeRate";
 import { sendWhatsappOtp, verifyWhatsappOtp, normalizeWhatsappNumber } from "./whatsappAuth";
 
 const categoryEnum = z.enum(CATEGORY_SLUGS);
@@ -325,12 +326,38 @@ export const appRouter = router({
         } else if (imageUrl && !needsBackgroundScrape) {
           imageUrls = [imageUrl];
         }
+        // Currency conversion: if scrapedDetails has a foreign-currency price, convert to INR
+        let originalPrice: string | undefined;
+        let originalCurrency: string | undefined;
+        if (input.scrapedDetails) {
+          try {
+            const scraped = JSON.parse(input.scrapedDetails) as { price?: string; currency?: string };
+            if (scraped.price && scraped.currency && scraped.currency !== "INR") {
+              originalPrice = scraped.price;
+              originalCurrency = scraped.currency;
+              const rateMap = await getLatestExchangeRates();
+              const numericPrice = parseFloat(scraped.price.replace(/[,\s]/g, ""));
+              if (!isNaN(numericPrice)) {
+                const inrPrice = convertToInr(numericPrice, scraped.currency, rateMap.rates);
+                if (inrPrice !== null) {
+                  // Patch the scrapedDetails price to INR before storing
+                  const patched = { ...scraped, price: String(inrPrice), currency: "INR", originalPrice: scraped.price, originalCurrency: scraped.currency };
+                  input = { ...input, scrapedDetails: JSON.stringify(patched).slice(0, 10_000) };
+                  console.log(`[requests.create] Converted ${scraped.currency} ${scraped.price} → ₹${inrPrice}`);
+                }
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
+
         const id = await db.createRequest({
           buyerId: ctx.account.accountId,
           title: input.title,
           category: input.category,
           imageUrl,
           imageUrls: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
+          originalPrice,
+          originalCurrency,
           budgetMin: input.budgetMin,
           budgetMax: input.budgetMax,
           timeline: input.timeline,
@@ -351,8 +378,27 @@ export const appRouter = router({
               }
               const urls = scraped.imageUrls ?? (scraped.imageUrl ? [scraped.imageUrl] : []);
               if (urls.length === 0 && !scraped.title) return;
-              const details = JSON.stringify({ ...scraped, imageBase64: undefined, imageMimeType: undefined });
-              await db.updateRequestImages(id, scraped.imageUrl ?? null, urls, details.slice(0, 10_000));
+              // Currency conversion for background-scraped price
+              let bgOriginalPrice: string | undefined;
+              let bgOriginalCurrency: string | undefined;
+              let scrapedForStorage = { ...scraped, imageBase64: undefined, imageMimeType: undefined };
+              if (scraped.price && scraped.currency && scraped.currency !== "INR") {
+                bgOriginalPrice = scraped.price;
+                bgOriginalCurrency = scraped.currency;
+                try {
+                  const rateMap = await getLatestExchangeRates();
+                  const numericPrice = parseFloat(scraped.price.replace(/[,\s]/g, ""));
+                  if (!isNaN(numericPrice)) {
+                    const inrPrice = convertToInr(numericPrice, scraped.currency, rateMap.rates);
+                    if (inrPrice !== null) {
+                      scrapedForStorage = { ...scrapedForStorage, price: String(inrPrice), currency: "INR" };
+                      console.log(`[requests.create] BG scrape converted ${scraped.currency} ${scraped.price} → ₹${inrPrice}`);
+                    }
+                  }
+                } catch { /* non-fatal */ }
+              }
+              const details = JSON.stringify(scrapedForStorage);
+              await db.updateRequestImages(id, scraped.imageUrl ?? null, urls, details.slice(0, 10_000), bgOriginalPrice, bgOriginalCurrency);
               console.log(`[requests.create] Background scrape patched request ${id} with ${urls.length} image(s)`);
               // Notify the buyer's open dashboard so the listing refreshes with images
               emitRequestUpdated(ctx.account.accountId, { requestId: id });

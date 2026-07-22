@@ -112,3 +112,25 @@
 - [x] ~~Redesign jeweller lead detail page (buyer listing view)~~ SKIPPED — explicitly deferred by user (Jul 22, "don't do fix 3 now")
 - [x] ~~Redesign jeweller quote price form interface~~ SKIPPED — explicitly deferred by user (Jul 22, "don't do fix 3 now")
 - [x] Tests + checkpoint for fixes 1 & 2 (server/requestImages.test.ts — 3 new tests; 56/56 passing)
+
+## Phase 3 — Currency Fix (Stage A + B)
+
+### Stage B — Exchange Rate Service
+- [x] Add `exchangeRates` table to drizzle/schema.ts (currency pair, rate, fetchedAt)
+- [x] Generate and apply migration SQL
+- [x] Create server/exchangeRate.ts: fetch rates from free API (fawazahmed0/exchange-api, no key needed), store in DB
+- [x] Register /api/scheduled/syncExchangeRates heartbeat handler
+- [x] Create daily cron job via manus-heartbeat at 18:35 UTC (task_uid: NHumrwGxsZ2shaNuXvZqic)
+- [x] Startup seed: exchange rates fetched on server boot alongside gold price
+
+### Stage A — Fix USD Conversion Bug in Scraper
+- [x] Update scraper text-regex to detect and set currency (USD/EUR/GBP/AED/INR) alongside price
+- [x] Fix Shopify helper: removed hardcoded INR assumption
+- [x] Store originalPrice + originalCurrency on the request row (new columns)
+- [x] On scrape (foreground + background), convert foreign currency price to INR using cached exchange rate
+- [x] scrapedDetails stored with INR-converted price; original preserved in originalPrice/originalCurrency columns
+
+### Tests + Checkpoint
+- [x] Vitest: convertToInr (6 cases including the exact $45,600 bug), parsePriceString (10 cases)
+- [x] 72/72 tests passing, tsc clean
+- [ ] Checkpoint saved

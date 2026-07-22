@@ -194,13 +194,54 @@ function extractFromText(text: string): Partial<ScrapedProduct> {
     if (result.diamondWeight) result.diamondWeight += " ct";
   }
 
-  // Price: ₹1,20,000 / Rs. 1,20,000 / $1200
+  // Price: ₹1,20,000 / Rs. 1,20,000 / $1200 / USD 45600
   if (!result.price) {
-    result.price = firstMatch(text, [
-      /(?:₹|Rs\.?\s*|INR\s*)([0-9,]+(?:\.[0-9]+)?)/i,
-      /(?:\$|USD\s*)([0-9,]+(?:\.[0-9]+)?)/i,
-      /price[:\s]+([0-9,]+(?:\.[0-9]+)?)/i,
-    ]);
+    // INR patterns
+    const inrMatch = text.match(/(?:₹|Rs\.?\s*|INR\s*)([0-9,]+(?:\.[0-9]+)?)/i);
+    if (inrMatch) {
+      result.price = inrMatch[1]!.trim();
+      result.currency = "INR";
+    }
+    // USD patterns
+    if (!result.price) {
+      const usdMatch = text.match(/(?:\$|USD\s*)([0-9,]+(?:\.[0-9]+)?)/i);
+      if (usdMatch) {
+        result.price = usdMatch[1]!.trim();
+        result.currency = "USD";
+      }
+    }
+    // EUR patterns
+    if (!result.price) {
+      const eurMatch = text.match(/(?:€|EUR\s*)([0-9,]+(?:\.[0-9]+)?)/i);
+      if (eurMatch) {
+        result.price = eurMatch[1]!.trim();
+        result.currency = "EUR";
+      }
+    }
+    // GBP patterns
+    if (!result.price) {
+      const gbpMatch = text.match(/(?:£|GBP\s*)([0-9,]+(?:\.[0-9]+)?)/i);
+      if (gbpMatch) {
+        result.price = gbpMatch[1]!.trim();
+        result.currency = "GBP";
+      }
+    }
+    // AED patterns
+    if (!result.price) {
+      const aedMatch = text.match(/(?:AED\s*)([0-9,]+(?:\.[0-9]+)?)/i);
+      if (aedMatch) {
+        result.price = aedMatch[1]!.trim();
+        result.currency = "AED";
+      }
+    }
+    // Plain price fallback (assume INR for Indian sites)
+    if (!result.price) {
+      const plainMatch = text.match(/price[:\s]+([0-9,]+(?:\.[0-9]+)?)/i);
+      if (plainMatch) {
+        result.price = plainMatch[1]!.trim();
+        result.currency = result.currency ?? "INR";
+      }
+    }
   }
 
   // Metal type: "18K gold", "22 karat gold", "platinum", "silver"
@@ -466,7 +507,12 @@ async function tryShopifyProductJson(url: string): Promise<Partial<ScrapedProduc
         out.imageUrls = srcs.slice(0, 5);
       }
     }
-    if (p.variants?.[0]?.price) { out.price = p.variants[0].price; out.currency = "INR"; }
+    if (p.variants?.[0]?.price) {
+      out.price = p.variants[0].price;
+      // Do NOT assume INR — Shopify stores can be in any currency.
+      // Currency will be filled from JSON-LD priceCurrency or meta tags later.
+      // Leave out.currency undefined here so the HTML-parse pass can fill it.
+    }
     if (p.body_html) out.description = p.body_html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
     const searchText = [p.title, ...(p.tags || [])].join(" ");
     const metalMatch = searchText.match(/\b((?:18|22|24|14|9)\s*(?:K|kt|karat|carat)\s*(?:yellow\s+|white\s+|rose\s+)?gold|platinum|sterling\s+silver)\b/i);

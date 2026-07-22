@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import {
   accounts,
   chatThreads,
+  exchangeRates,
   InsertAccount,
   InsertChatThread,
   InsertJewelleryReport,
@@ -211,7 +212,9 @@ export async function updateRequestImages(
   id: number,
   imageUrl: string | null,
   imageUrls: string[],
-  scrapedDetails?: string | null
+  scrapedDetails?: string | null,
+  originalPrice?: string | null,
+  originalCurrency?: string | null
 ) {
   const db = await getDb();
   if (!db) return;
@@ -220,6 +223,8 @@ export async function updateRequestImages(
   };
   if (imageUrl) set.imageUrl = imageUrl;
   if (scrapedDetails) set.scrapedDetails = scrapedDetails;
+  if (originalPrice) set.originalPrice = originalPrice;
+  if (originalCurrency) set.originalCurrency = originalCurrency;
   await db.update(requests).set(set).where(eq(requests.id, id));
 }
 

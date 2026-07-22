@@ -12,6 +12,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { sdk } from "./sdk";
 import { fetchAndStoreGoldPrice } from "../goldPrice";
+import { fetchAndStoreExchangeRates } from "../exchangeRate";
 import type { Request, Response } from "express";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -71,6 +72,22 @@ async function startServer() {
     }
   });
 
+  // --- Scheduled: Exchange Rate Sync (daily 12 AM IST = 18:30 UTC) ---
+  app.post("/api/scheduled/syncExchangeRates", async (req: Request, res: Response) => {
+    try {
+      const user = await sdk.authenticateRequest(req);
+      if (!user.isCron) {
+        return res.status(403).json({ error: "cron-only" });
+      }
+      const result = await fetchAndStoreExchangeRates();
+      return res.json({ ok: true, rates: result.rates, fetchedAt: result.fetchedAt });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[syncExchangeRates] Error:", message);
+      return res.status(500).json({ error: message, timestamp: new Date().toISOString() });
+    }
+  });
+
   // --- Scheduled: WhatsApp Notification Webhook (Phase 2 - blank credentials) ---
   app.post("/api/webhooks/whatsapp", async (req: Request, res: Response) => {
     // PHASE 2 PLACEHOLDER: WhatsApp Business webhook handler
@@ -118,6 +135,9 @@ async function startServer() {
     fetchAndStoreGoldPrice()
       .then(r => console.log(`[startup] Gold price seeded: ₹${r.pricePerGram24kt}/g (24KT)`))
       .catch(err => console.warn("[startup] Gold price seed failed (non-fatal):", err?.message));
+    fetchAndStoreExchangeRates()
+      .then(r => console.log(`[startup] Exchange rates seeded: ${Object.keys(r.rates).join(", ")}`))
+      .catch(err => console.warn("[startup] Exchange rate seed failed (non-fatal):", err?.message));
   });
 }
 
