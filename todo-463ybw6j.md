@@ -109,6 +109,6 @@
 - [x] Fix requote card in buyer chat: currently shows "scroll to top" hint with nothing rendered — must appear embedded inline in the chat flow with interactive Accept/Reject buttons
 - [x] Fix image race condition: buyer pastes URL and submits before scraping completes → listing has no image; scraping must complete/attach in background (server-side background scrape fallback patches the request row)
 - [x] Support multiple product images (up to 5 if available) instead of only 1, with photo-count badge on buyer request cards and thumbnail gallery in jeweller lead detail
-- [ ] ~~Redesign jeweller lead detail page (buyer listing view)~~ DEFERRED per user (Jul 22)
-- [ ] ~~Redesign jeweller quote price form interface~~ DEFERRED per user (Jul 22)
+- [x] ~~Redesign jeweller lead detail page (buyer listing view)~~ SKIPPED — explicitly deferred by user (Jul 22, "don't do fix 3 now")
+- [x] ~~Redesign jeweller quote price form interface~~ SKIPPED — explicitly deferred by user (Jul 22, "don't do fix 3 now")
 - [x] Tests + checkpoint for fixes 1 & 2 (server/requestImages.test.ts — 3 new tests; 56/56 passing)
