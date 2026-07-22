@@ -202,6 +202,27 @@ export async function getOpenRequestsByCategories(
     .orderBy(desc(requests.createdAt));
 }
 
+/**
+ * Update the images (and optionally scraped details) of a request after a
+ * background server-side scrape completes. Used for the image race-condition
+ * fallback: buyer submitted a page URL before the frontend scrape finished.
+ */
+export async function updateRequestImages(
+  id: number,
+  imageUrl: string | null,
+  imageUrls: string[],
+  scrapedDetails?: string | null
+) {
+  const db = await getDb();
+  if (!db) return;
+  const set: Partial<InsertRequest> = {
+    imageUrls: imageUrls.length > 0 ? JSON.stringify(imageUrls) : null,
+  };
+  if (imageUrl) set.imageUrl = imageUrl;
+  if (scrapedDetails) set.scrapedDetails = scrapedDetails;
+  await db.update(requests).set(set).where(eq(requests.id, id));
+}
+
 export async function updateRequestStatus(
   id: number,
   status: "open" | "quoted" | "paused" | "closed"

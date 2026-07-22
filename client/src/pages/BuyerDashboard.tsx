@@ -53,6 +53,8 @@ export const buyerNav = [
 
 interface ScrapedProduct {
   imageUrl?: string;
+  /** all extracted product images (re-hosted), up to 5 */
+  imageUrls?: string[];
   /** base64-encoded image bytes when storagePut failed server-side */
   imageBase64?: string;
   /** MIME type for imageBase64 */
@@ -272,6 +274,10 @@ function NewRequestDialog() {
       title,
       category,
       imageUrl: finalImageUrl,
+      imageUrls:
+        imageMode === "url" && scraped?.imageUrls && scraped.imageUrls.length > 0
+          ? scraped.imageUrls.slice(0, 5)
+          : undefined,
       imageBase64: scrapedHasBase64
         ? scraped!.imageBase64
         : (imageMode === "upload" && imageBase64 ? imageBase64 : undefined),
@@ -506,6 +512,10 @@ export default function BuyerDashboard() {
   });
 
   useSocket({
+    "request-updated": () => {
+      // Background scrape attached images to a request — refresh the listing
+      utils.requests.mine.invalidate();
+    },
     "new-quote": payload => {
       toast.success(
         `New quote received: ${formatINR(payload?.totalPrice)} from ${payload?.businessName || payload?.jewellerName || "a jeweller"}`,
@@ -551,6 +561,12 @@ export default function BuyerDashboard() {
             const scraped: ScrapedProduct | null = r.scrapedDetails
               ? (() => { try { return JSON.parse(r.scrapedDetails!); } catch { return null; } })()
               : null;
+            const galleryUrls: string[] = (() => {
+              try {
+                const arr = r.imageUrls ? JSON.parse(r.imageUrls) : [];
+                return Array.isArray(arr) ? arr.slice(0, 5) : [];
+              } catch { return []; }
+            })();
             return (
               <Link
                 key={r.id}
@@ -567,6 +583,26 @@ export default function BuyerDashboard() {
                   ) : (
                     <div className="flex h-full items-center justify-center text-neutral-300">
                       <ImagePlus className="h-10 w-10" strokeWidth={1.2} />
+                    </div>
+                  )}
+                  {galleryUrls.length > 1 && (
+                    <div className="absolute bottom-2 left-2 right-2 flex items-end justify-between gap-2">
+                      <div className="flex gap-1">
+                        {galleryUrls.slice(1, 4).map((img, i) => (
+                          <img
+                            key={img}
+                            src={proxiedImageUrl(img)}
+                            alt={`${r.title} ${i + 2}`}
+                            className="h-9 w-9 rounded-md border border-white/70 object-cover shadow-sm"
+                            onError={e => {
+                              (e.target as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <div className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                        {galleryUrls.length} photos
+                      </div>
                     </div>
                   )}
                   <div className="absolute left-3 top-3">

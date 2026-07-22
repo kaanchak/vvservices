@@ -751,22 +751,35 @@ export default function ChatThreadPage({ threadId }: { threadId: number }) {
                 </div>
               ) : (
                 data.messages.map((msg: any) => {
-                  // Requote messages get special rendering
+                  // Requote messages get special rendering — embedded interactive card
                   if (msg.type === "requote" && msg.requoteId) {
-                    const rq = (data as any).requotes?.find
-                      ? (data as any).requotes?.find((r: any) => r.id === msg.requoteId)
-                      : null;
+                    const rq = ((data as any).requotes ?? []).find(
+                      (r: any) => r.id === msg.requoteId
+                    );
                     if (rq) {
+                      const isOwnRequote = msg.senderId === account?.id;
                       return (
-                        <div key={msg.id} className="my-3">
-                          <RequoteCard
-                            requote={rq}
-                            originalPrice={data.quote?.totalPrice ?? 0}
-                            isBuyer={isBuyer}
-                            onAccept={id => acceptRequote.mutate({ requoteId: id })}
-                            onReject={id => rejectRequote.mutate({ requoteId: id })}
-                            isPending={acceptRequote.isPending || rejectRequote.isPending}
-                          />
+                        <div
+                          key={msg.id}
+                          id={`requote-${rq.id}`}
+                          className={`my-3 flex ${isOwnRequote ? "justify-end" : "justify-start"}`}
+                        >
+                          <div className="w-full max-w-[420px]">
+                            <div className={`mb-1 flex items-center gap-1.5 text-[11px] text-neutral-400 ${isOwnRequote ? "justify-end" : ""}`}>
+                              <RefreshCw className="h-3 w-3" />
+                              {isOwnRequote ? "You sent a revised quote" : "Revised quote received"}
+                              <span>·</span>
+                              {new Date(msg.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            </div>
+                            <RequoteCard
+                              requote={rq}
+                              originalPrice={data.quote?.totalPrice ?? 0}
+                              isBuyer={isBuyer}
+                              onAccept={id => acceptRequote.mutate({ requoteId: id })}
+                              onReject={id => rejectRequote.mutate({ requoteId: id })}
+                              isPending={acceptRequote.isPending || rejectRequote.isPending}
+                            />
+                          </div>
                         </div>
                       );
                     }
@@ -780,15 +793,23 @@ export default function ChatThreadPage({ threadId }: { threadId: number }) {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Active requote banner */}
+            {/* Active requote banner — clickable, scrolls to the embedded card */}
             {data.activeRequote && isBuyer && (
-              <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  document
+                    .getElementById(`requote-${data.activeRequote!.id}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+                className="mt-2 w-full rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 flex items-center gap-2 hover:bg-amber-100 transition-colors text-left"
+              >
                 <RefreshCw className="h-4 w-4 shrink-0" />
-                <span>
-                  Jeweller has sent a revised quote for{" "}
-                  <strong>{formatINR(data.activeRequote.newPrice)}</strong>. Scroll up to review.
+                <span className="flex-1">
+                  Revised quote for <strong>{formatINR(data.activeRequote.newPrice)}</strong>{" "}
+                  awaiting your response — tap to review &amp; accept.
                 </span>
-              </div>
+              </button>
             )}
 
             {/* Input area */}

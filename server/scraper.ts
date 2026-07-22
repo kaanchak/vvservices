@@ -23,6 +23,8 @@ import { storagePut } from "./storage";
 
 export interface ScrapedProduct {
   imageUrl?: string;
+  /** All product images found (up to 5, deduped). First entry mirrors imageUrl. */
+  imageUrls?: string[];
   /** base64-encoded image bytes — set when storagePut is unavailable; client should upload via imageBase64 path */
   imageBase64?: string;
   /** MIME type for imageBase64 */
@@ -119,12 +121,22 @@ function extractFromJsonLd(scripts: string[]): Partial<ScrapedProduct> {
       if (!result.title && ld.name) result.title = ld.name;
       if (!result.description && ld.description) result.description = ld.description;
 
-      // image
-      if (!result.imageUrl) {
-        if (typeof ld.image === "string") result.imageUrl = ld.image;
-        else if (Array.isArray(ld.image) && ld.image.length > 0) result.imageUrl = ld.image[0];
-        else if (ld.image && typeof ld.image === "object" && !Array.isArray(ld.image)) {
-          result.imageUrl = (ld.image as { url?: string }).url;
+      // image — collect ALL images, not just the first
+      if (!result.imageUrls || result.imageUrls.length === 0) {
+        const imgs: string[] = [];
+        if (typeof ld.image === "string") imgs.push(ld.image);
+        else if (Array.isArray(ld.image)) {
+          for (const im of ld.image) {
+            if (typeof im === "string") imgs.push(im);
+            else if (im && typeof im === "object" && (im as { url?: string }).url) imgs.push((im as { url?: string }).url!);
+          }
+        } else if (ld.image && typeof ld.image === "object") {
+          const u = (ld.image as { url?: string }).url;
+          if (u) imgs.push(u);
+        }
+        if (imgs.length > 0) {
+          result.imageUrls = imgs.slice(0, 5);
+          if (!result.imageUrl) result.imageUrl = imgs[0];
         }
       }
 
@@ -447,7 +459,13 @@ async function tryShopifyProductJson(url: string): Promise<Partial<ScrapedProduc
     if (!p) return null;
     const out: Partial<ScrapedProduct> = {};
     if (p.title) out.title = p.title;
-    if (p.images?.[0]?.src) out.imageUrl = p.images[0].src;
+    if (p.images && p.images.length > 0) {
+      const srcs = p.images.map(im => im.src).filter((s): s is string => !!s);
+      if (srcs.length > 0) {
+        out.imageUrl = srcs[0];
+        out.imageUrls = srcs.slice(0, 5);
+      }
+    }
     if (p.variants?.[0]?.price) { out.price = p.variants[0].price; out.currency = "INR"; }
     if (p.body_html) out.description = p.body_html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 500);
     const searchText = [p.title, ...(p.tags || [])].join(" ");
@@ -516,11 +534,22 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   }
 
   // ── Open Graph / Twitter meta ──
-  const ogImage =
-    $('meta[property="og:image"]').attr("content") ||
+  // Collect ALL og:image tags (many product pages emit several)
+  const ogImages: string[] = [];
+  $('meta[property="og:image"]').each((_, el) => {
+    const c = $(el).attr("content");
+    const a = abs(url, c);
+    if (a) ogImages.push(a);
+  });
+  const twImage =
     $('meta[name="twitter:image"]').attr("content") ||
     $('meta[name="twitter:image:src"]').attr("content");
-  if (!result.imageUrl && ogImage) result.imageUrl = abs(url, ogImage);
+  const twAbs = abs(url, twImage);
+  if (twAbs) ogImages.push(twAbs);
+  if (!result.imageUrl && ogImages.length > 0) result.imageUrl = ogImages[0];
+  if ((!result.imageUrls || result.imageUrls.length === 0) && ogImages.length > 0) {
+    result.imageUrls = ogImages.slice(0, 5);
+  }
 
   if (!result.title) {
     result.title =
@@ -550,17 +579,22 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
     }
   }
 
-  // ── Fallback image: first large <img> in the page body ──
-  if (!result.imageUrl) {
+  // ── Fallback images: large <img> tags in the page body (collect up to 5) ──
+  if (!result.imageUrls || result.imageUrls.length < 3) {
+    const bodyImgs: string[] = [];
     $("img").each((_, el) => {
       const src = $(el).attr("src") || $(el).attr("data-src") || $(el).attr("data-lazy-src");
       const w = parseInt($(el).attr("width") || "0", 10);
       const h = parseInt($(el).attr("height") || "0", 10);
       if (src && (w > 300 || h > 300)) {
-        result.imageUrl = abs(url, src);
-        return false; // break
+        const a = abs(url, src);
+        if (a) bodyImgs.push(a);
+        if (bodyImgs.length >= 5) return false;
       }
     });
+    if (!result.imageUrl && bodyImgs.length > 0) result.imageUrl = bodyImgs[0];
+    const merged = [...(result.imageUrls ?? []), ...bodyImgs];
+    if (merged.length > 0) result.imageUrls = merged;
   }
 
   // ── Shopify JSON API fallback ─────────────────────────────────────────────
@@ -571,6 +605,7 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
     if (shopifyData) {
       if (!result.title && shopifyData.title) result.title = shopifyData.title;
       if (!result.imageUrl && shopifyData.imageUrl) result.imageUrl = shopifyData.imageUrl;
+      if ((!result.imageUrls || result.imageUrls.length === 0) && shopifyData.imageUrls) result.imageUrls = shopifyData.imageUrls;
       if (!result.description && shopifyData.description) result.description = shopifyData.description;
       if (!result.price && shopifyData.price) { result.price = shopifyData.price; result.currency = shopifyData.currency; }
       if (!result.metalType && shopifyData.metalType) result.metalType = shopifyData.metalType;
@@ -603,17 +638,39 @@ export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   // If storagePut fails (e.g. in some production environments), fall back to
   // returning the raw image bytes as base64 so the client can upload them
   // via the existing imageBase64 → storagePut path in requests.create.
-  if (result.imageUrl) {
-    const hosted = await reHostImage(result.imageUrl);
-    if (hosted) {
-      result.imageUrl = hosted;
-    } else {
-      // storagePut failed — download bytes and return as base64 for client-side upload
-      const b64 = await downloadImageAsBase64(result.imageUrl);
+  // Dedupe + cap the gallery list before re-hosting
+  if (result.imageUrls && result.imageUrls.length > 0) {
+    const seen = new Set<string>();
+    result.imageUrls = result.imageUrls
+      .filter(u => {
+        // Normalize by stripping query strings for dedupe comparison
+        const norm = u.split("?")[0]!;
+        if (seen.has(norm)) return false;
+        seen.add(norm);
+        return true;
+      })
+      .slice(0, 5);
+    if (!result.imageUrl) result.imageUrl = result.imageUrls[0];
+  } else if (result.imageUrl) {
+    result.imageUrls = [result.imageUrl];
+  }
+
+  if (result.imageUrls && result.imageUrls.length > 0) {
+    // Re-host all gallery images in parallel (up to 5)
+    const hostedList = await Promise.all(result.imageUrls.map(u => reHostImage(u)));
+    const finalUrls: string[] = [];
+    for (let i = 0; i < result.imageUrls.length; i++) {
+      finalUrls.push(hostedList[i] ?? result.imageUrls[i]!);
+    }
+    result.imageUrls = finalUrls;
+    result.imageUrl = finalUrls[0];
+
+    // If the primary image could not be re-hosted, provide base64 fallback for it
+    if (!hostedList[0]) {
+      const b64 = await downloadImageAsBase64(result.imageUrls[0]!);
       if (b64) {
         result.imageBase64 = b64.data;
         result.imageMimeType = b64.mimeType;
-        // Keep imageUrl as the external URL so the client has a fallback
       }
     }
   }

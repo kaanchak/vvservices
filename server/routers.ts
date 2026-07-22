@@ -19,6 +19,7 @@ import {
   emitNewMessage,
   emitRequoteEvent,
   emitThreadStatusChange,
+  emitRequestUpdated,
 } from "./realtime";
 import { scrapeProductUrl, reHostImageForRequest } from "./scraper";
 import { storagePut } from "./storage";
@@ -259,6 +260,7 @@ export const appRouter = router({
           title: z.string().min(1).max(191),
           category: categoryEnum,
           imageUrl: z.string().max(2000).optional(),
+          imageUrls: z.array(z.string().max(2000)).max(5).optional(),
           imageBase64: z.string().max(8_000_000).optional(),
           imageMimeType: z.string().max(100).optional(),
           budgetMin: z.number().int().min(0).optional(),
@@ -270,6 +272,22 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         let imageUrl = input.imageUrl;
+        let imageUrls: string[] = input.imageUrls ?? [];
+        // Detect whether the submitted imageUrl is actually a product PAGE url
+        // (buyer hit submit before the frontend scrape finished). In that case we
+        // create the request immediately and scrape in the background.
+        const looksLikePageUrl = (u: string) => {
+          if (!u.startsWith("http://") && !u.startsWith("https://")) return false;
+          const path = u.split("?")[0]!.toLowerCase();
+          return !/\.(jpe?g|png|webp|gif|avif|bmp|svg)$/.test(path) && !path.includes("/manus-storage/");
+        };
+        const needsBackgroundScrape =
+          !input.imageBase64 &&
+          !!imageUrl &&
+          imageUrls.length === 0 &&
+          !input.scrapedDetails &&
+          looksLikePageUrl(imageUrl);
+
         if (input.imageBase64) {
           const buffer = Buffer.from(input.imageBase64, "base64");
           const ext = (input.imageMimeType || "image/jpeg").split("/")[1] || "jpg";
@@ -279,7 +297,8 @@ export const appRouter = router({
             input.imageMimeType || "image/jpeg"
           );
           imageUrl = url;
-        } else if (imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
+          if (imageUrls.length === 0) imageUrls = [url];
+        } else if (!needsBackgroundScrape && imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
           console.log("[requests.create] Re-hosting external image:", imageUrl.slice(0, 80));
           try {
             const rehosted = await reHostImageForRequest(imageUrl);
@@ -288,17 +307,61 @@ export const appRouter = router({
             console.error("[requests.create] Image re-host threw:", (err as Error)?.message);
           }
         }
+        // Re-host any still-external gallery images (already-hosted ones pass through).
+        // Scraper output is normally already re-hosted, so this is a safety net.
+        if (imageUrls.length > 0) {
+          imageUrls = await Promise.all(
+            imageUrls.map(async u => {
+              if (u.includes("/manus-storage/") || !u.startsWith("http")) return u;
+              try {
+                const hosted = await reHostImageForRequest(u);
+                return hosted ?? u;
+              } catch {
+                return u;
+              }
+            })
+          );
+          if (!imageUrl || looksLikePageUrl(imageUrl)) imageUrl = imageUrls[0];
+        } else if (imageUrl && !needsBackgroundScrape) {
+          imageUrls = [imageUrl];
+        }
         const id = await db.createRequest({
           buyerId: ctx.account.accountId,
           title: input.title,
           category: input.category,
           imageUrl,
+          imageUrls: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
           budgetMin: input.budgetMin,
           budgetMax: input.budgetMax,
           timeline: input.timeline,
           notes: input.notes,
           scrapedDetails: input.scrapedDetails,
         });
+
+        // Background scrape fallback (non-blocking): buyer submitted a page URL
+        // before the frontend scrape completed. Scrape server-side and patch the
+        // request row with the extracted images + details once done.
+        if (needsBackgroundScrape && imageUrl) {
+          const pageUrl = imageUrl;
+          scrapeProductUrl(pageUrl)
+            .then(async scraped => {
+              if (scraped.blocked) {
+                console.warn("[requests.create] Background scrape blocked:", scraped.blockedReason);
+                return;
+              }
+              const urls = scraped.imageUrls ?? (scraped.imageUrl ? [scraped.imageUrl] : []);
+              if (urls.length === 0 && !scraped.title) return;
+              const details = JSON.stringify({ ...scraped, imageBase64: undefined, imageMimeType: undefined });
+              await db.updateRequestImages(id, scraped.imageUrl ?? null, urls, details.slice(0, 10_000));
+              console.log(`[requests.create] Background scrape patched request ${id} with ${urls.length} image(s)`);
+              // Notify the buyer's open dashboard so the listing refreshes with images
+              emitRequestUpdated(ctx.account.accountId, { requestId: id });
+            })
+            .catch(err => {
+              console.error("[requests.create] Background scrape failed:", (err as Error)?.message);
+            });
+        }
+
         const request = await db.getRequestById(id);
         const buyer = await db.getAccountById(ctx.account.accountId);
         emitNewRequest(input.category, {
@@ -588,6 +651,7 @@ export const appRouter = router({
             : null,
           activeRequote,
           acceptedRequote,
+          requotes: allRequotes,
         };
       }),
 

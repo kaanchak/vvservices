@@ -448,6 +448,17 @@ export default function JewellerLeadDetail({ id }: { id: number }) {
     ? (() => { try { return JSON.parse(lead.scrapedDetails); } catch { return null; } })()
     : null;
 
+  // Image gallery: parse imageUrls JSON (fallback to single imageUrl)
+  const galleryImages: string[] = (() => {
+    try {
+      const arr = lead?.imageUrls ? JSON.parse(lead.imageUrls) : [];
+      if (Array.isArray(arr) && arr.length > 0) return arr.slice(0, 5);
+    } catch { /* ignore */ }
+    return lead?.imageUrl ? [lead.imageUrl] : [];
+  })();
+  const [activeImage, setActiveImage] = useState(0);
+  const mainImage = galleryImages[Math.min(activeImage, galleryImages.length - 1)] ?? lead?.imageUrl;
+
   const extractedSpecs = scraped
     ? [
         { icon: <Tag className="h-4 w-4" />, label: "Metal type", value: scraped.metalType },
@@ -491,22 +502,51 @@ export default function JewellerLeadDetail({ id }: { id: number }) {
         <div className="grid gap-8 lg:grid-cols-[1fr_420px]">
           {/* ── Left column: product details ─────────────────────────────── */}
           <div className="space-y-6">
-            {/* Hero image */}
-            <div className="overflow-hidden rounded-2xl border border-[#D4AF37]/15 bg-neutral-100 shadow-sm">
-              {lead.imageUrl ? (
-                <img
-                  src={proxiedImageUrl(lead.imageUrl)}
-                  alt={lead.title}
-                  className="h-80 w-full object-contain p-4 lg:h-[420px]"
-                  onError={e => {
-                    const el = e.target as HTMLImageElement;
-                    el.style.display = "none";
-                    el.parentElement!.classList.add("flex", "items-center", "justify-center");
-                  }}
-                />
-              ) : (
-                <div className="flex h-80 items-center justify-center text-neutral-300 lg:h-[420px]">
-                  <ImagePlus className="h-16 w-16" strokeWidth={1} />
+            {/* Hero image + gallery */}
+            <div className="space-y-3">
+              <div className="overflow-hidden rounded-2xl border border-[#D4AF37]/15 bg-neutral-100 shadow-sm">
+                {mainImage ? (
+                  <img
+                    key={mainImage}
+                    src={proxiedImageUrl(mainImage)}
+                    alt={lead.title}
+                    className="h-80 w-full object-contain p-4 lg:h-[420px]"
+                    onError={e => {
+                      const el = e.target as HTMLImageElement;
+                      el.style.display = "none";
+                      el.parentElement!.classList.add("flex", "items-center", "justify-center");
+                    }}
+                  />
+                ) : (
+                  <div className="flex h-80 items-center justify-center text-neutral-300 lg:h-[420px]">
+                    <ImagePlus className="h-16 w-16" strokeWidth={1} />
+                  </div>
+                )}
+              </div>
+              {galleryImages.length > 1 && (
+                <div className="flex gap-2">
+                  {galleryImages.map((img, i) => (
+                    <button
+                      key={img}
+                      type="button"
+                      onClick={() => setActiveImage(i)}
+                      className={`h-16 w-16 flex-shrink-0 overflow-hidden rounded-lg border-2 bg-neutral-100 transition-all ${
+                        i === activeImage
+                          ? "border-[#D4AF37] ring-1 ring-[#D4AF37]/40"
+                          : "border-transparent opacity-70 hover:opacity-100"
+                      }`}
+                      aria-label={`View image ${i + 1}`}
+                    >
+                      <img
+                        src={proxiedImageUrl(img)}
+                        alt={`${lead.title} ${i + 1}`}
+                        className="h-full w-full object-cover"
+                        onError={e => {
+                          (e.target as HTMLImageElement).style.opacity = "0.2";
+                        }}
+                      />
+                    </button>
+                  ))}
                 </div>
               )}
             </div>

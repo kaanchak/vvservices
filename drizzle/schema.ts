@@ -69,6 +69,8 @@ export const requests = mysqlTable("requests", {
   budgetMax: int("budgetMax"),
   timeline: varchar("timeline", { length: 100 }),
   notes: text("notes"),
+  /** JSON array of product image URLs (up to 5; first entry mirrors imageUrl) */
+  imageUrls: text("imageUrls"),
   /** JSON blob of ScrapedProduct data extracted from imageUrl when it is a web URL */
   scrapedDetails: text("scrapedDetails"),
   /**

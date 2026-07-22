@@ -59,6 +59,11 @@ export function emitNewRequest(category: string, payload: unknown): void {
   io?.to("admins").emit("admin-update", { type: "request" });
 }
 
+/** Emit to the buyer when their request row was patched (e.g. background scrape attached images). */
+export function emitRequestUpdated(buyerId: number, payload: unknown): void {
+  io?.to(`buyer:${buyerId}`).emit("request-updated", payload);
+}
+
 export function emitNewQuote(buyerId: number, payload: unknown): void {
   io?.to(`buyer:${buyerId}`).emit("new-quote", payload);
   io?.to("admins").emit("admin-update", { type: "quote" });
