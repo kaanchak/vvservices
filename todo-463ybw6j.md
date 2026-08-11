@@ -141,7 +141,7 @@
 - [x] Rewrite server/whatsappAuth.ts to send OTP via MSG91 WhatsApp template API
 - [x] Vitest: credential validation + payload shape (8 tests passing)
 - [ ] BLOCKED: MSG91 accepts the send (HTTP 200, request_id returned) but messages do not deliver — Meta-side WABA/template verification incomplete. User will resolve Meta verification later. Mock-mode fallback keeps login working meanwhile.
-- [ ] Remove server/whatsappAuth.livesend.test.ts probe file once delivery confirmed
+- [x] Confirmed server/whatsappAuth.livesend.test.ts is absent and no live-send test remains in the suite (89/89 tests run without hitting the real MSG91 API). NOTE: this is cleanup only — WhatsApp delivery itself is still UNCONFIRMED, see the blocked item above.
 
 ## Phase 5 — Pivot to Discovery Platform + Jeweller Profiles
 
@@ -183,7 +183,7 @@
 - [x] Tests self-clean via afterAll teardown so approved test profiles no longer leak into the public directory
 - [x] Removed the temporary live MSG91 send probe test
 - [x] 89/89 tests passing across 9 files, tsc clean
-- [ ] Checkpoint saved
+- [x] Checkpoint saved (version: 58ee44d1)
 
 ## Reminders (raised by user, to revisit)
 - [ ] REMINDER: revisit/redesign the quotation flow
