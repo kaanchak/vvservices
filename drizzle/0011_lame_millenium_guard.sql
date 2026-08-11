@@ -1,0 +1,1 @@
+ALTER TABLE `creditLedger` MODIFY COLUMN `type` enum('subscription_allocation','topup','quote_debit','quote_refund','admin_grant','admin_deduct','topup_expiry','wallet_freeze','wallet_unfreeze','subscription_status_change') NOT NULL;

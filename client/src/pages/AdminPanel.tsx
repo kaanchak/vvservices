@@ -2,6 +2,7 @@ import AppShell from "@/components/AppShell";
 import { CategoryBadge, StatusBadge, formatINR } from "@/components/Brand";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -40,6 +41,7 @@ import {
   Store,
   Trash2,
   Users,
+  WalletCards,
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
@@ -498,6 +500,112 @@ function ResolveReportDialog({
   );
 }
 
+function CreditWalletDialog({ jewellerId, onClose }: { jewellerId: number | null; onClose: () => void }) {
+  const utils = trpc.useUtils();
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState("");
+  const { data, isLoading } = trpc.admin.creditJewellerDetail.useQuery(
+    { jewellerId: jewellerId!, limit: 100 },
+    { enabled: !!jewellerId }
+  );
+  const invalidate = () => utils.admin.invalidate();
+  const adjust = trpc.admin.adjustJewellerCredits.useMutation({
+    onSuccess: result => {
+      toast.success(`${result.adjusted > 0 ? "Granted" : "Deducted"} ${Math.abs(result.adjusted)} V◈.`);
+      setAmount("");
+      setReason("");
+      invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
+  const freeze = trpc.admin.setJewellerWalletFrozen.useMutation({
+    onSuccess: () => {
+      toast.success("Wallet status updated.");
+      setReason("");
+      invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
+  const subscription = trpc.admin.setJewellerSubscription.useMutation({
+    onSuccess: () => {
+      toast.success("Subscription status updated.");
+      setReason("");
+      invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
+  const status = data?.subscription.status ?? "inactive";
+  const balance = data?.totalCredits ?? 0;
+  const validReason = reason.trim().length >= 3;
+
+  return (
+    <Dialog open={!!jewellerId} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="font-serif text-2xl">V◈ credit controls</DialogTitle>
+          <DialogDescription>Every action is recorded permanently with its reason.</DialogDescription>
+        </DialogHeader>
+        {isLoading || !data ? (
+          <div className="space-y-3 py-5">{[1, 2, 3].map(i => <div key={i} className="h-16 animate-pulse rounded-xl bg-neutral-100" />)}</div>
+        ) : (
+          <div className="space-y-5">
+            <div className="rounded-2xl bg-[#1A1A1A] p-5 text-white">
+              <p className="text-xs font-bold uppercase tracking-widest text-[#D4AF37]">{data.jeweller.businessName || data.jeweller.name}</p>
+              <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+                <div><span className="font-serif text-4xl">{balance.toLocaleString("en-IN")}</span><span className="ml-2 text-[#E8D98B]">V◈</span></div>
+                <Badge className={status === "active" ? "bg-emerald-500/20 text-emerald-200" : "bg-white/10 text-white"}>{status.replace(/_/g, " ")}</Badge>
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2 border-t border-white/10 pt-4 text-center text-xs">
+                <div><strong className="block text-base">{data.wallet.subscriptionCredits}</strong><span className="text-neutral-400">Plan</span></div>
+                <div><strong className="block text-base">{data.wallet.topupCredits}</strong><span className="text-neutral-400">Top-up</span></div>
+                <div><strong className="block text-base">{data.wallet.adjustmentCredits}</strong><span className="text-neutral-400">Adjusted</span></div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-neutral-200 p-4">
+                <p className="font-semibold">Adjust credits</p>
+                <p className="mt-1 text-xs text-neutral-500">Positive grants; negative deductions apply to admin-issued credits only.</p>
+                <div className="mt-3 space-y-2">
+                  <Input inputMode="numeric" placeholder="e.g. 100 or -25" value={amount} onChange={event => setAmount(event.target.value)} />
+                  <Textarea rows={2} placeholder="Reason for this adjustment (required)" value={reason} onChange={event => setReason(event.target.value)} />
+                  <Button size="sm" disabled={adjust.isPending || !validReason || !Number.isInteger(Number(amount)) || Number(amount) === 0} onClick={() => adjust.mutate({ jewellerId: data.jeweller.id, amount: Number(amount), reason: reason.trim() })}>
+                    {Number(amount) < 0 ? "Deduct V◈" : "Grant V◈"}
+                  </Button>
+                </div>
+              </div>
+              <div className="rounded-xl border border-neutral-200 p-4">
+                <p className="font-semibold">Access controls</p>
+                <p className="mt-1 text-xs text-neutral-500">Cancellation expires paid top-ups and blocks future credit use.</p>
+                <div className="mt-3 space-y-2">
+                  <Textarea rows={2} placeholder="Reason for status change (required)" value={reason} onChange={event => setReason(event.target.value)} />
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" disabled={freeze.isPending || !validReason} onClick={() => freeze.mutate({ jewellerId: data.jeweller.id, frozen: !data.wallet.isFrozen, reason: reason.trim() })}>{data.wallet.isFrozen ? "Unfreeze wallet" : "Freeze wallet"}</Button>
+                    <select aria-label="Subscription status" className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={selectedStatus || status} onChange={event => setSelectedStatus(event.target.value)}>
+                      <option value="inactive">Inactive</option><option value="active">Active</option><option value="past_due">Past due</option><option value="cancelled">Cancelled</option><option value="suspended">Suspended</option>
+                    </select>
+                    <Button size="sm" disabled={subscription.isPending || !validReason} onClick={() => subscription.mutate({ jewellerId: data.jeweller.id, status: (selectedStatus || status) as "inactive" | "active" | "past_due" | "cancelled" | "suspended", reason: reason.trim() })}>Update plan</Button>
+                  </div>
+                  <Button size="sm" variant="destructive" disabled={subscription.isPending || !validReason || status === "cancelled"} onClick={() => subscription.mutate({ jewellerId: data.jeweller.id, status: "cancelled", reason: reason.trim() })}>Deactivate now & expire top-ups</Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-neutral-200">
+              <div className="border-b border-neutral-100 px-4 py-3"><p className="font-semibold">Immutable V◈ ledger</p></div>
+              {data.ledger.length === 0 ? <p className="px-4 py-10 text-center text-sm text-neutral-500">No V◈ activity recorded yet.</p> : <div className="divide-y divide-neutral-100">{data.ledger.map(entry => {
+                const delta = entry.subscriptionDelta + entry.topupDelta + entry.adjustmentDelta;
+                return <div key={entry.id} className="flex items-center justify-between gap-3 px-4 py-3"><div className="min-w-0"><p className="text-sm font-medium">{entry.type.replace(/_/g, " ")}</p><p className="truncate text-xs text-neutral-500">{entry.reason}</p></div><p className={`shrink-0 text-sm font-bold ${delta > 0 ? "text-emerald-700" : delta < 0 ? "text-red-600" : "text-neutral-500"}`}>{delta > 0 ? "+" : ""}{delta} V◈</p></div>;
+              })}</div>}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── AdminPanel ───────────────────────────────────────────────────────────────
 
 export default function AdminPanel() {
@@ -515,7 +623,11 @@ export default function AdminPanel() {
   const { data: allReports } = trpc.admin.allReports.useQuery(undefined, { enabled });
   const { data: incidents } = trpc.admin.jewellersIncidents.useQuery(undefined, { enabled });
   const { data: profiles } = trpc.admin.jewellerProfiles.useQuery(undefined, { enabled });
+  const { data: creditJewellers } = trpc.admin.creditJewellers.useQuery(undefined, { enabled });
   const [reviewingId, setReviewingId] = useState<number | null>(null);
+  const [creditJewellerId, setCreditJewellerId] = useState<number | null>(null);
+  const [creditSearch, setCreditSearch] = useState("");
+  const [creditStatusFilter, setCreditStatusFilter] = useState("all");
 
   useSocket({
     "admin-update": () => {
@@ -527,6 +639,12 @@ export default function AdminPanel() {
   const jewellers = accounts?.filter(a => a.role === "jeweller") ?? [];
   const pendingCount = pendingReports?.length ?? 0;
   const pendingProfiles = (profiles ?? []).filter(p => p.profileStatus === "pending");
+  const visibleCreditJewellers = (creditJewellers ?? []).filter(jeweller => {
+    const term = creditSearch.trim().toLowerCase();
+    const matchesText = !term || [jeweller.name, jeweller.businessName, jeweller.email].filter(Boolean).some(value => value!.toLowerCase().includes(term));
+    const matchesStatus = creditStatusFilter === "all" || jeweller.subscription.status === creditStatusFilter;
+    return matchesText && matchesStatus;
+  });
 
   return (
     <AppShell nav={adminNav} requiredRole="admin" loginPath="/login">
@@ -584,6 +702,7 @@ export default function AdminPanel() {
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="credits"><WalletCards className="mr-1 h-3.5 w-3.5" />V◈ Credits ({creditJewellers?.length ?? 0})</TabsTrigger>
         </TabsList>
 
         {/* ── Buyers ── */}
@@ -1024,9 +1143,51 @@ export default function AdminPanel() {
             </Table>
           </div>
         </TabsContent>
+
+        {/* ── V◈ Credits ── */}
+        <TabsContent value="credits">
+          <div className="mb-4 rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/8 px-4 py-3 text-sm text-[#6d5618]">
+            <strong>V◈ control centre:</strong> Grant or deduct correction credits, freeze wallets, and manage subscription access. Every operation requires a reason and writes an immutable ledger entry.
+          </div>
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <Input className="sm:max-w-sm" placeholder="Search jeweller, business, or email" value={creditSearch} onChange={event => setCreditSearch(event.target.value)} />
+            <select aria-label="Filter credit accounts by subscription status" className="h-10 rounded-md border border-input bg-background px-3 text-sm" value={creditStatusFilter} onChange={event => setCreditStatusFilter(event.target.value)}>
+              <option value="all">All subscription states</option><option value="active">Active</option><option value="inactive">Inactive</option><option value="past_due">Past due</option><option value="cancelled">Cancelled</option><option value="suspended">Suspended</option>
+            </select>
+          </div>
+          <div className="luxury-shadow overflow-x-auto rounded-2xl border border-[#D4AF37]/15 bg-white">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Jeweller</TableHead>
+                  <TableHead>Subscription</TableHead>
+                  <TableHead className="text-right">Available V◈</TableHead>
+                  <TableHead className="text-right">Plan / Top-up / Adjusted</TableHead>
+                  <TableHead>Wallet</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visibleCreditJewellers.length === 0 ? (
+                  <TableRow><TableCell colSpan={6} className="py-12 text-center text-neutral-500">No jeweller V◈ accounts match this filter.</TableCell></TableRow>
+                ) : visibleCreditJewellers.map(jeweller => (
+                  <TableRow key={jeweller.id}>
+                    <TableCell><p className="font-medium">{jeweller.businessName || jeweller.name}</p><p className="text-xs text-neutral-500">{jeweller.email}</p></TableCell>
+                    <TableCell><Badge className={jeweller.subscription.status === "active" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-neutral-200 bg-neutral-100 text-neutral-600"}>{jeweller.subscription.status.replace(/_/g, " ")}</Badge></TableCell>
+                    <TableCell className="text-right font-semibold text-[#8a6d1c]">{jeweller.totalCredits.toLocaleString("en-IN")} V◈</TableCell>
+                    <TableCell className="text-right text-xs text-neutral-600">{jeweller.wallet.subscriptionCredits} / {jeweller.wallet.topupCredits} / {jeweller.wallet.adjustmentCredits}</TableCell>
+                    <TableCell>{jeweller.wallet.isFrozen ? <Badge variant="destructive">Frozen</Badge> : <span className="text-sm text-emerald-700">Open</span>}</TableCell>
+                    <TableCell className="text-right"><Button size="sm" variant="outline" onClick={() => setCreditJewellerId(jeweller.id)}>Manage</Button></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </TabsContent>
       </Tabs>
 
       <ReviewProfileDialog jewellerId={reviewingId} onClose={() => setReviewingId(null)} />
+      <CreditWalletDialog jewellerId={creditJewellerId} onClose={() => setCreditJewellerId(null)} />
     </AppShell>
   );
 }

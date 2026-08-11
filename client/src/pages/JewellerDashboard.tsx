@@ -25,6 +25,7 @@ export const jewellerNav = [
   { href: "/jeweller", label: "Lead Feed" },
   { href: "/jeweller/quotes", label: "My Quotes" },
   { href: "/jeweller/chats", label: "Chats" },
+  { href: "/jeweller/credits", label: "V◈ Credits" },
   { href: "/jeweller/profile", label: "My Profile" },
 ];
 
@@ -68,6 +69,7 @@ function QuoteDialog({
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
+  const { data: creditOverview } = trpc.credits.overview.useQuery(undefined, { enabled: !!lead });
 
   // Live gold price from API
   const { data: goldPriceData } = trpc.goldPrice.current.useQuery();
@@ -109,6 +111,8 @@ function QuoteDialog({
       toast.success("Quote sent! The buyer sees it instantly.");
       utils.requests.leads.invalidate();
       utils.quotes.mine.invalidate();
+      utils.credits.overview.invalidate();
+      utils.credits.ledger.invalidate();
       onClose();
       setGoldWeight("");
       setDiamondWeight("");
@@ -135,6 +139,7 @@ function QuoteDialog({
             onSubmit={e => {
               e.preventDefault();
               if (!totalPrice || totalPrice <= 0) return toast.error("Total price must be greater than zero");
+              if (!creditOverview?.canQuote) return toast.error("You need an active subscription and at least 1 V◈ credit to send a quote.");
               create.mutate({
                 requestId: lead.id,
                 goldWeightGrams: effectiveGoldWeight ? parseFloat(effectiveGoldWeight) : undefined,
@@ -147,6 +152,11 @@ function QuoteDialog({
               });
             }}
           >
+            <div className={`rounded-xl border px-3 py-2 text-xs ${creditOverview?.canQuote ? "border-[#D4AF37]/30 bg-[#D4AF37]/8 text-[#6d5618]" : "border-red-200 bg-red-50 text-red-700"}`}>
+              {creditOverview?.canQuote
+                ? `This original quote uses 1 V◈. Available: ${creditOverview.totalCredits} V◈. Requotes are free.`
+                : "Quote access requires an active V◈ subscription and at least 1 available credit."}
+            </div>
             {/* Live gold price banner */}
             {goldPriceData && (
               <div className="rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/8 p-3">
@@ -244,8 +254,8 @@ function QuoteDialog({
               <Label htmlFor="message">Message to buyer</Label>
               <Textarea id="message" rows={3} maxLength={2000} placeholder="Certifications, delivery time, what's included…" value={message} onChange={e => setMessage(e.target.value)} />
             </div>
-            <Button type="submit" disabled={create.isPending} className="w-full bg-gold-gradient font-semibold text-[#1A1A1A] hover:opacity-90">
-              {create.isPending ? "Sending…" : "Send quote"}
+            <Button type="submit" disabled={create.isPending || !creditOverview?.canQuote} className="w-full bg-gold-gradient font-semibold text-[#1A1A1A] hover:opacity-90">
+              {create.isPending ? "Sending…" : "Send quote · 1 V◈"}
             </Button>
           </form>
         )}
@@ -260,6 +270,7 @@ export default function JewellerDashboard() {
   const [quotingLead, setQuotingLead] = useState<Lead | null>(null);
 
   const { data: goldPriceData } = trpc.goldPrice.current.useQuery();
+  const { data: creditOverview } = trpc.credits.overview.useQuery(undefined, { enabled: !!account });
 
   const { data: leads, isLoading } = trpc.requests.leads.useQuery(undefined, {
     enabled: !!account,
@@ -287,6 +298,7 @@ export default function JewellerDashboard() {
           { duration: 8000 }
         );
         utils.quotes.mine.invalidate();
+        utils.credits.invalidate();
       },
     },
     { categories }
@@ -302,6 +314,11 @@ export default function JewellerDashboard() {
             {categories.map(categoryLabel).join(", ") || "—"}
           </span>
         </p>
+        {creditOverview && (
+          <Link href="/jeweller/credits" className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-[#D4AF37]/30 bg-[#D4AF37]/8 px-3 py-1.5 text-xs font-semibold text-[#8a6d1c] transition-colors hover:bg-[#D4AF37]/15">
+            <Gem className="h-3.5 w-3.5" /> {creditOverview.totalCredits.toLocaleString("en-IN")} V◈ available
+          </Link>
+        )}
         {/* Live gold price banner */}
         {goldPriceData && (
           <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/8 px-4 py-3">

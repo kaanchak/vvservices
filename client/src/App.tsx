@@ -8,6 +8,7 @@ import BuyerQuotes from "@/pages/BuyerQuotes";
 import ChatThreadPage from "@/pages/ChatThread";
 import Home from "@/pages/Home";
 import JewellerChats from "@/pages/JewellerChats";
+import JewellerCredits from "@/pages/JewellerCredits";
 import JewellerDashboard from "@/pages/JewellerDashboard";
 import JewellerDirectory from "@/pages/JewellerDirectory";
 import JewellerLeadDetail from "@/pages/JewellerLeadDetail";
@@ -46,6 +47,7 @@ function Router() {
       {/* Jeweller area */}
       <Route path={"/jeweller"} component={JewellerDashboard} />
       <Route path={"/jeweller/quotes"} component={JewellerQuotes} />
+      <Route path={"/jeweller/credits"} component={JewellerCredits} />
       <Route path={"/jeweller/profile"} component={JewellerProfileEditor} />
       <Route path={"/jeweller/leads/:id"}>
         {params => <JewellerLeadDetail id={parseInt(params.id)} />}

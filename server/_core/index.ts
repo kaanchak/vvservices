@@ -13,6 +13,7 @@ import { serveStatic, setupVite } from "./vite";
 import { sdk } from "./sdk";
 import { fetchAndStoreGoldPrice } from "../goldPrice";
 import { fetchAndStoreExchangeRates } from "../exchangeRate";
+import { processVerifiedRazorpayWebhook, razorpayProvider } from "../payments";
 import type { Request, Response } from "express";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -39,6 +40,23 @@ async function startServer() {
   const server = createServer(app);
   // Socket.io realtime layer (path /api/socket.io so the gateway routes it)
   initRealtime(server);
+  // Razorpay signs the raw JSON payload. This route must remain before the
+  // global JSON parser so signature verification never receives altered bytes.
+  app.post("/api/webhooks/razorpay", express.raw({ type: "application/json", limit: "1mb" }), async (req: Request, res: Response) => {
+    if (!razorpayProvider.isConfigured()) {
+      return res.status(503).json({ error: "razorpay-not-configured" });
+    }
+    try {
+      const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+      const result = await processVerifiedRazorpayWebhook(rawBody, req.header("x-razorpay-signature") ?? undefined);
+      return res.status(200).json({ ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const invalidSignature = message.includes("Invalid or unconfigured Razorpay webhook signature");
+      console.error("[Razorpay Webhook] Processing failed:", message);
+      return res.status(invalidSignature ? 401 : 500).json({ error: invalidSignature ? "invalid-signature" : "webhook-processing-failed" });
+    }
+  });
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));

@@ -201,3 +201,18 @@
 - [x] Add server/shortRequestRouting.test.ts — 8 tests for 14KT/18KT, natural/lab-grown diamond, stone inference, no-guess routing, tRPC short-form compatibility, and all-category lead visibility
 - [x] 97/97 tests passing across 10 files; TypeScript clean; test teardown confirmed no profile or short-form test accounts remain in live data
 - [x] Checkpoint and publish simplified request form (version: a0fafb57)
+
+## Phase 7 — V◈ Jeweller Credits, Subscriptions, and Payment Readiness
+- [x] Audit existing quote creation/dismissal, admin screens, and payment integration boundaries; verified Razorpay supports payment/subscription HTTP webhooks and raw-body signature verification (notes: docs/razorpay-webhook-architecture-notes.md)
+- [x] Add wallet, immutable ledger, subscription, provider payment, and webhook-event schema with migrations 0009_omniscient_callisto.sql and 0010_little_hemingway.sql; new subscriptions are inactive until a confirmed payment or admin activation
+- [x] Define `V◈` credit rules: ₹9,999/month → 500 credits, roll-over cap 1,500, active subscription required to spend/top up, 1 quote = 1 credit, dismissed quote = automatic 1-credit refund, requotes free
+- [x] Implement atomic quote debit/refund, subscription status guards, monthly allocation logic, and idempotent ledger writes in server/credits.ts; original quote debit and quote creation share one transaction
+- [x] Build provider-neutral payment abstraction plus Razorpay-ready payment/webhook adapter in server/payments.ts and /api/webhooks/razorpay (live calls disabled until credentials supplied; raw-body HMAC verification and idempotent event/payment processing enforced)
+- [x] Build jeweller balance/subscription/ledger view at /jeweller/credits with V◈ breakdown, quote-cost rules, zero-credit access messaging, and immutable history; lead feed and quote dialog now show the balance and enforce 1 V◈ cost
+- [x] Build admin V◈ wallet/subscription console in the Admin Dashboard: wallet detail, ledger review, reasoned grant/deduct, freeze/unfreeze, and subscription status controls
+- [x] Add V◈ admin-console search/filter by jeweller name, business, email, and subscription status
+- [x] Add explicit `Deactivate now & expire top-ups` action and explanatory cancellation rule in the V◈ admin console
+- [x] Seed jeweller@demo.com (Verma Jewels) with active subscription and `V◈ 10,000` via a traceable `admin_grant` ledger entry (`demo-seed:account:2:10000`)
+- [x] Add focused V◈ tests: 1,500 cap, original-quote debit/refund, inactive guard, admin adjustment, paid-top-up expiry on cancellation, Razorpay signature validation, and webhook retry idempotency; requotes remain uncharged by design
+- [x] Final validation: TypeScript clean and 103/103 tests passing across 12 files
+- [ ] Checkpoint and publish V◈ credits, subscription, payment-readiness, and admin controls

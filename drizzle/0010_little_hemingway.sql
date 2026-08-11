@@ -1,0 +1,1 @@
+ALTER TABLE `jewellerSubscriptions` MODIFY COLUMN `status` enum('inactive','active','past_due','cancelled','suspended') NOT NULL DEFAULT 'inactive';

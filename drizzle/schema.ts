@@ -292,6 +292,141 @@ export type Order = typeof orders.$inferSelect;
 export type InsertOrder = typeof orders.$inferInsert;
 
 /**
+ * Current V◈ credit balances for each jeweller.
+ *
+ * Buckets remain separate so the monthly rollover cap applies only to included
+ * subscription credits, while top-ups can expire on subscription cancellation
+ * without affecting manual goodwill adjustments.
+ */
+export const creditWallets = mysqlTable("creditWallets", {
+  id: int("id").autoincrement().primaryKey(),
+  jewellerId: int("jewellerId").notNull().unique(),
+  /** Monthly-plan credits; capped at 1,500 V◈ during allocation. */
+  subscriptionCredits: int("subscriptionCredits").default(0).notNull(),
+  /** Paid top-up credits; expire when the associated subscription is cancelled. */
+  topupCredits: int("topupCredits").default(0).notNull(),
+  /** Admin-issued corrections and goodwill credits. */
+  adjustmentCredits: int("adjustmentCredits").default(0).notNull(),
+  /** Admin safety switch; blocks quoting without destroying balance history. */
+  isFrozen: boolean("isFrozen").default(false).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type CreditWallet = typeof creditWallets.$inferSelect;
+export type InsertCreditWallet = typeof creditWallets.$inferInsert;
+
+/**
+ * Append-only V◈ accounting ledger. Every balance change stores its exact
+ * bucket deltas and post-change balances, making manual reconciliation safe.
+ */
+export const creditLedger = mysqlTable("creditLedger", {
+  id: int("id").autoincrement().primaryKey(),
+  jewellerId: int("jewellerId").notNull(),
+  type: mysqlEnum("type", [
+    "subscription_allocation",
+    "topup",
+    "quote_debit",
+    "quote_refund",
+    "admin_grant",
+    "admin_deduct",
+    "topup_expiry",
+    "wallet_freeze",
+    "wallet_unfreeze",
+    "subscription_status_change",
+  ]).notNull(),
+  /** Signed delta applied to the monthly subscription bucket. */
+  subscriptionDelta: int("subscriptionDelta").default(0).notNull(),
+  /** Signed delta applied to the paid top-up bucket. */
+  topupDelta: int("topupDelta").default(0).notNull(),
+  /** Signed delta applied to the admin adjustment bucket. */
+  adjustmentDelta: int("adjustmentDelta").default(0).notNull(),
+  subscriptionBalanceAfter: int("subscriptionBalanceAfter").notNull(),
+  topupBalanceAfter: int("topupBalanceAfter").notNull(),
+  adjustmentBalanceAfter: int("adjustmentBalanceAfter").notNull(),
+  quoteId: int("quoteId"),
+  paymentRecordId: int("paymentRecordId"),
+  adminId: int("adminId"),
+  /** Globally unique operation key; makes retries and webhooks idempotent. */
+  idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull().unique(),
+  reason: varchar("reason", { length: 1000 }).notNull(),
+  metadata: text("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CreditLedgerEntry = typeof creditLedger.$inferSelect;
+export type InsertCreditLedgerEntry = typeof creditLedger.$inferInsert;
+
+/** One recurring ₹9,999 plan record per jeweller. */
+export const jewellerSubscriptions = mysqlTable("jewellerSubscriptions", {
+  id: int("id").autoincrement().primaryKey(),
+  jewellerId: int("jewellerId").notNull().unique(),
+  planCode: varchar("planCode", { length: 64 }).default("vv-pro-9999").notNull(),
+  status: mysqlEnum("status", ["inactive", "active", "past_due", "cancelled", "suspended"])
+    .default("inactive")
+    .notNull(),
+  monthlyCreditAllowance: int("monthlyCreditAllowance").default(500).notNull(),
+  rolloverCap: int("rolloverCap").default(1500).notNull(),
+  currentPeriodStart: timestamp("currentPeriodStart"),
+  currentPeriodEnd: timestamp("currentPeriodEnd"),
+  cancelledAt: timestamp("cancelledAt"),
+  provider: varchar("provider", { length: 64 }),
+  providerSubscriptionId: varchar("providerSubscriptionId", { length: 191 }).unique(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type JewellerSubscription = typeof jewellerSubscriptions.$inferSelect;
+export type InsertJewellerSubscription = typeof jewellerSubscriptions.$inferInsert;
+
+/**
+ * Normalized provider payment record. Razorpay is the first adapter, but the
+ * provider field keeps the rest of the platform independent of one gateway.
+ */
+export const paymentRecords = mysqlTable("paymentRecords", {
+  id: int("id").autoincrement().primaryKey(),
+  jewellerId: int("jewellerId").notNull(),
+  provider: varchar("provider", { length: 64 }).notNull(),
+  kind: mysqlEnum("kind", ["subscription", "topup"]).notNull(),
+  status: mysqlEnum("status", ["created", "pending", "paid", "failed", "refunded", "cancelled"])
+    .default("created")
+    .notNull(),
+  /** Amount in the smallest currency unit: paise for INR. */
+  amountPaise: int("amountPaise").notNull(),
+  currency: varchar("currency", { length: 8 }).default("INR").notNull(),
+  creditsToIssue: int("creditsToIssue").notNull(),
+  providerPaymentId: varchar("providerPaymentId", { length: 191 }).unique(),
+  providerOrderId: varchar("providerOrderId", { length: 191 }).unique(),
+  providerSubscriptionId: varchar("providerSubscriptionId", { length: 191 }),
+  metadata: text("metadata"),
+  confirmedAt: timestamp("confirmedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type PaymentRecord = typeof paymentRecords.$inferSelect;
+export type InsertPaymentRecord = typeof paymentRecords.$inferInsert;
+
+/** Raw third-party events, retained for signature audit and retry idempotency. */
+export const paymentWebhookEvents = mysqlTable("paymentWebhookEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  provider: varchar("provider", { length: 64 }).notNull(),
+  /** `provider:event_id`; unique across gateway retries and multiple providers. */
+  eventKey: varchar("eventKey", { length: 255 }).notNull().unique(),
+  eventType: varchar("eventType", { length: 128 }).notNull(),
+  signatureValid: boolean("signatureValid").default(false).notNull(),
+  status: mysqlEnum("status", ["received", "processed", "ignored", "failed"])
+    .default("received")
+    .notNull(),
+  payload: text("payload").notNull(),
+  processingError: varchar("processingError", { length: 1000 }),
+  processedAt: timestamp("processedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PaymentWebhookEvent = typeof paymentWebhookEvents.$inferSelect;
+export type InsertPaymentWebhookEvent = typeof paymentWebhookEvents.$inferInsert;
+
+/**
  * Reports filed by buyers against jewellers for misconduct
  * (e.g. changing quote without buyer's request, unprofessional behaviour).
  * Admin reviews and acts as tribunal based on incident count.

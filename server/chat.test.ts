@@ -32,6 +32,32 @@ vi.mock("./goldPrice", () => ({
   getGoldPriceHistory: vi.fn().mockResolvedValue([]),
 }));
 
+// ── V◈ credits adapter: preserves the focused chat/slot tests without a DB ────
+vi.mock("./credits", async () => {
+  const db = await import("./db");
+  class CreditSystemError extends Error {}
+  return {
+    CreditSystemError,
+    createQuoteWithCredit: vi.fn(async (quote: any) => db.createQuote(quote)),
+    dismissQuoteWithCreditRefund: vi.fn(async (quoteId: number) => {
+      const quote = await db.getQuoteById(quoteId);
+      if (!quote) throw new CreditSystemError("Quote not found");
+      await db.updateQuoteStatus(quoteId, "dismissed");
+      return { quote, refunded: true };
+    }),
+    getCreditOverview: vi.fn(),
+    getCreditLedger: vi.fn(),
+    adjustCreditsByAdmin: vi.fn(),
+    setSubscriptionStatusByAdmin: vi.fn(),
+    setWalletFrozen: vi.fn(),
+    VV_CREDIT_SYMBOL: "V◈",
+    VV_MONTHLY_CREDITS: 500,
+    VV_PLAN_PRICE_INR: 9999,
+    VV_QUOTE_COST: 1,
+    VV_ROLLOVER_CAP: 1500,
+  };
+});
+
 // ── Context helpers ───────────────────────────────────────────────────────────
 
 type VVAccount = NonNullable<TrpcContext["account"]>;

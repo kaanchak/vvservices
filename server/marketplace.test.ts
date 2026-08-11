@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import type { AccountSession } from "./accountAuth";
+import { allocateMonthlyCredits } from "./credits";
 
 /**
  * Integration-style tests running against the real database through
@@ -103,6 +104,7 @@ describe("requests and quotes flow", () => {
       categories: ["gold"],
     });
     const jeweller: AccountSession = { accountId: jReg.id, role: "jeweller" };
+    await allocateMonthlyCredits(jReg.id, `test:marketplace-activation:${jReg.id}`, "Activate isolated marketplace test jeweller");
 
     // Buyer creates a request (image URL path).
     const buyerCaller = appRouter.createCaller(createCtx(buyer).ctx);

@@ -26,6 +26,22 @@ import { storagePut } from "./storage";
 import { getLatestGoldPrice, fetchAndStoreGoldPrice, getGoldPriceHistory } from "./goldPrice";
 import { getLatestExchangeRates, convertToInr } from "./exchangeRate";
 import { sendWhatsappOtp, verifyWhatsappOtp, normalizeWhatsappNumber } from "./whatsappAuth";
+import {
+  adjustCreditsByAdmin,
+  createQuoteWithCredit,
+  CreditSystemError,
+  dismissQuoteWithCreditRefund,
+  getCreditLedger,
+  getCreditOverview,
+  getCreditOverviewReadOnly,
+  setSubscriptionStatusByAdmin,
+  setWalletFrozen,
+  VV_CREDIT_SYMBOL,
+  VV_MONTHLY_CREDITS,
+  VV_PLAN_PRICE_INR,
+  VV_QUOTE_COST,
+  VV_ROLLOVER_CAP,
+} from "./credits";
 
 const categoryEnum = z.enum(CATEGORY_SLUGS);
 
@@ -520,7 +536,7 @@ export const appRouter = router({
         }
         const jeweller = await db.getAccountById(ctx.account.accountId);
         const categories = (jeweller?.categories?.split(",") ?? []) as string[];
-        if (!categories.includes(request.category)) {
+        if (!request.autoRouteAll && !categories.includes(request.category)) {
           throw new TRPCError({ code: "FORBIDDEN", message: "This lead is not in your categories" });
         }
         const buyer = await db.getAccountById(request.buyerId);
@@ -607,18 +623,26 @@ export const appRouter = router({
             message: "You already submitted a quote for this request",
           });
         }
-        const id = await db.createQuote({
-          requestId: input.requestId,
-          jewellerId: ctx.account.accountId,
-          goldWeightGrams: input.goldWeightGrams?.toFixed(2),
-          diamondWeightCarats: input.diamondWeightCarats?.toFixed(2),
-          makingCharges: input.makingCharges,
-          totalPrice: input.totalPrice,
-          message: input.message,
-          preMessage: input.preMessage,
-          goldPurity: input.goldPurity,
-          goldPricePerGram: input.goldPricePerGram?.toFixed(2),
-        });
+        let id: number;
+        try {
+          id = await createQuoteWithCredit({
+            requestId: input.requestId,
+            jewellerId: ctx.account.accountId,
+            goldWeightGrams: input.goldWeightGrams?.toFixed(2),
+            diamondWeightCarats: input.diamondWeightCarats?.toFixed(2),
+            makingCharges: input.makingCharges,
+            totalPrice: input.totalPrice,
+            message: input.message,
+            preMessage: input.preMessage,
+            goldPurity: input.goldPurity,
+            goldPricePerGram: input.goldPricePerGram?.toFixed(2),
+          });
+        } catch (err) {
+          if (err instanceof CreditSystemError) {
+            throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+          }
+          throw err;
+        }
         // Increment slot count (may pause request if it hits 5)
         await db.adjustActiveQuoteCount(input.requestId, 1);
         // Ensure status is at least "quoted"
@@ -688,11 +712,10 @@ export const appRouter = router({
           });
         }
 
-        await db.updateQuoteStatus(input.quoteId, input.status);
-
         let threadId: number | undefined;
 
         if (input.status === "accepted") {
+          await db.updateQuoteStatus(input.quoteId, input.status);
           // Open a chat thread — request stays open for other jewellers
           threadId = await db.createChatThread({
             requestId: request.id,
@@ -709,7 +732,9 @@ export const appRouter = router({
             type: "system",
           });
         } else {
-          // Dismissed: free the slot
+          // Dismissed: free the quote slot and automatically restore the one V◈
+          // credit that was debited when this original quote was submitted.
+          await dismissQuoteWithCreditRefund(input.quoteId);
           await db.adjustActiveQuoteCount(request.id, -1);
         }
 
@@ -1112,6 +1137,31 @@ export const appRouter = router({
     }),
   }),
 
+  // --- V◈ Credits ---------------------------------------------------------------
+  credits: router({
+    /** Current jeweller wallet and paid-plan status. */
+    overview: jewellerProcedure.query(async ({ ctx }) => getCreditOverview(ctx.account.accountId)),
+    /** Append-only self-service history. */
+    ledger: jewellerProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(250).optional() }).optional())
+      .query(async ({ ctx, input }) => getCreditLedger(ctx.account.accountId, input?.limit ?? 100)),
+    /** Product rules; checkout stays disabled until verified provider credentials are supplied. */
+    catalog: publicProcedure.query(() => ({
+      symbol: VV_CREDIT_SYMBOL,
+      monthlyPlan: {
+        code: "vv-pro-9999",
+        priceInr: VV_PLAN_PRICE_INR,
+        credits: VV_MONTHLY_CREDITS,
+        rolloverCap: VV_ROLLOVER_CAP,
+      },
+      quoteCost: VV_QUOTE_COST,
+      topupsEnabled: false,
+      paymentProviderConfigured: Boolean(
+        process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_WEBHOOK_SECRET
+      ),
+    })),
+  }),
+
   // --- Admin --------------------------------------------------------------------
   admin: router({
     stats: vvAdminProcedure.query(() => db.getAdminStats()),
@@ -1265,6 +1315,105 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         await db.deletePortfolioItem(input.itemId);
         return { success: true } as const;
+      }),
+
+
+    /** Wallet summary for every jeweller, used by the V◈ admin console. */
+    creditJewellers: vvAdminProcedure.query(async () => {
+      const accounts = await db.getAllAccounts();
+      const jewellers = accounts.filter(account => account.role === "jeweller");
+      return Promise.all(
+        jewellers.map(async jeweller => {
+          const overview = await getCreditOverviewReadOnly(jeweller.id);
+          const { passwordHash, ...safeJeweller } = jeweller;
+          return { ...safeJeweller, ...overview };
+        })
+      );
+    }),
+
+    /** Detailed wallet and append-only ledger for one jeweller. */
+    creditJewellerDetail: vvAdminProcedure
+      .input(z.object({ jewellerId: z.number().int().positive(), limit: z.number().int().min(1).max(250).optional() }))
+      .query(async ({ input }) => {
+        const jeweller = await db.getAccountById(input.jewellerId);
+        if (!jeweller || jeweller.role !== "jeweller") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller not found" });
+        }
+        const [overview, ledger] = await Promise.all([
+          getCreditOverviewReadOnly(jeweller.id),
+          getCreditLedger(jeweller.id, input.limit ?? 100),
+        ]);
+        const { passwordHash, ...safeJeweller } = jeweller;
+        return { jeweller: safeJeweller, ...overview, ledger };
+      }),
+
+    /** Grant or deduct goodwill V◈ credits. Every change records an audit reason. */
+    adjustJewellerCredits: vvAdminProcedure
+      .input(
+        z.object({
+          jewellerId: z.number().int().positive(),
+          amount: z.number().int().min(-100000).max(100000).refine(value => value !== 0),
+          reason: z.string().min(3).max(1000),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const jeweller = await db.getAccountById(input.jewellerId);
+        if (!jeweller || jeweller.role !== "jeweller") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller not found" });
+        }
+        try {
+          return await adjustCreditsByAdmin({
+            ...input,
+            adminId: ctx.account.accountId,
+            idempotencyKey: `admin-adjust:${ctx.account.accountId}:${input.jewellerId}:${Date.now()}`,
+          });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Unable to adjust V◈ credits" });
+        }
+      }),
+
+    /** Freeze a wallet without deleting its balance history, or safely unfreeze it. */
+    setJewellerWalletFrozen: vvAdminProcedure
+      .input(z.object({ jewellerId: z.number().int().positive(), frozen: z.boolean(), reason: z.string().min(3).max(1000) }))
+      .mutation(async ({ ctx, input }) => {
+        const jeweller = await db.getAccountById(input.jewellerId);
+        if (!jeweller || jeweller.role !== "jeweller") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller not found" });
+        }
+        try {
+          return await setWalletFrozen({
+            ...input,
+            adminId: ctx.account.accountId,
+            idempotencyKey: `admin-freeze:${ctx.account.accountId}:${input.jewellerId}:${Date.now()}`,
+          });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Unable to update V◈ wallet" });
+        }
+      }),
+
+    /** Admin override for offline reconciliation, disputes, or verified payments. */
+    setJewellerSubscription: vvAdminProcedure
+      .input(
+        z.object({
+          jewellerId: z.number().int().positive(),
+          status: z.enum(["inactive", "active", "past_due", "cancelled", "suspended"]),
+          reason: z.string().min(3).max(1000),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const jeweller = await db.getAccountById(input.jewellerId);
+        if (!jeweller || jeweller.role !== "jeweller") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller not found" });
+        }
+        try {
+          return await setSubscriptionStatusByAdmin({
+            ...input,
+            adminId: ctx.account.accountId,
+            idempotencyKey: `admin-subscription:${ctx.account.accountId}:${input.jewellerId}:${Date.now()}`,
+          });
+        } catch (err) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err instanceof Error ? err.message : "Unable to update subscription" });
+        }
       }),
 
 
