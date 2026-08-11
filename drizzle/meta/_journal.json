@@ -50,6 +50,13 @@
       "when": 1784725719563,
       "tag": "0006_great_magus",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1786432940808,
+      "tag": "0007_first_dark_phoenix",
+      "breakpoints": true
     }
   ]
 }

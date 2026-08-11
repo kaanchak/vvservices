@@ -30,7 +30,6 @@ import {
   MessageSquare,
   RefreshCw,
   Send,
-  ShoppingCart,
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -46,10 +45,6 @@ function OfficialQuoteCard({
   businessName,
   city,
   rating,
-  onPlaceOrder,
-  orderExists,
-  isPlacingOrder,
-  isBuyer,
 }: {
   quote: {
     id: number;
@@ -73,10 +68,6 @@ function OfficialQuoteCard({
   businessName?: string | null;
   city?: string | null;
   rating?: string | null;
-  onPlaceOrder: () => void;
-  orderExists: boolean;
-  isPlacingOrder: boolean;
-  isBuyer: boolean;
 }) {
   const effectivePrice = acceptedRequote ? acceptedRequote.newPrice : quote.totalPrice;
   const effectivePurity = acceptedRequote?.newGoldPurity ?? quote.goldPurity;
@@ -138,26 +129,6 @@ function OfficialQuoteCard({
           {city && ` · ${city}`}
           {rating && ` · ★ ${rating}`}
         </p>
-      )}
-
-      {isBuyer && (
-        <Button
-          className="w-full bg-gold-gradient font-semibold text-[#1A1A1A] hover:opacity-90"
-          disabled={orderExists || isPlacingOrder}
-          onClick={onPlaceOrder}
-        >
-          {isPlacingOrder ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : orderExists ? (
-            <>
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Order Placed
-            </>
-          ) : (
-            <>
-              <ShoppingCart className="h-4 w-4" /> Add to Cart
-            </>
-          )}
-        </Button>
       )}
     </div>
   );
@@ -601,14 +572,6 @@ export default function ChatThreadPage({ threadId }: { threadId: number }) {
     { enabled: !!account }
   );
 
-  const placeOrder = trpc.orders.placeOrder.useMutation({
-    onSuccess: () => {
-      toast.success("Order placed! Payment will be processed shortly.");
-      refetch();
-    },
-    onError: e => toast.error(e.message),
-  });
-
   const sendMessage = trpc.chat.sendMessage.useMutation({
     onSuccess: () => {
       setMsgText("");
@@ -670,15 +633,6 @@ export default function ChatThreadPage({ threadId }: { threadId: number }) {
   };
 
   const isThreadClosed = data?.thread.status !== "open";
-  const orderExists = !!data && false; // Will be checked via order query below
-
-  const orderQuery = trpc.orders.myOrders.useQuery(undefined, {
-    enabled: isBuyer && !!account,
-  });
-  const existingOrder = orderQuery.data?.find(
-    (o: any) => o.order?.threadId === threadId
-  );
-
   return (
     <AppShell nav={nav} requiredRole={isBuyer ? "buyer" : "jeweller"} loginPath="/login">
       {/* Header */}
@@ -863,23 +817,7 @@ export default function ChatThreadPage({ threadId }: { threadId: number }) {
                 businessName={data.jeweller?.businessName}
                 city={data.jeweller?.city}
                 rating={data.jeweller?.rating}
-                onPlaceOrder={() => placeOrder.mutate({ threadId })}
-                orderExists={!!existingOrder}
-                isPlacingOrder={placeOrder.isPending}
-                isBuyer={isBuyer}
               />
-            )}
-
-            {existingOrder && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm">
-                <div className="flex items-center gap-2 text-emerald-700 font-semibold mb-1">
-                  <CheckCircle2 className="h-4 w-4" /> Order Placed
-                </div>
-                <p className="text-emerald-600 text-xs">
-                  Your order has been placed. The jeweller will begin work once payment is confirmed.
-                  Payment gateway coming soon.
-                </p>
-              </div>
             )}
 
             {/* Thread status info */}

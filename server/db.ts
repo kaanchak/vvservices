@@ -9,6 +9,7 @@ import {
   InsertJewelleryReport,
   InsertMessage,
   InsertOrder,
+  InsertPortfolioItem,
   InsertQuote,
   InsertRequest,
   InsertRequote,
@@ -16,6 +17,7 @@ import {
   jewelleryReports,
   messages,
   orders,
+  portfolioItems,
   quotes,
   requests,
   requotes,
@@ -314,6 +316,11 @@ export async function getQuotesForBuyer(buyerId: number) {
       businessName: accounts.businessName,
       rating: accounts.rating,
       city: accounts.city,
+      jewellerId: accounts.id,
+      jewellerWhatsapp: accounts.whatsappNumber,
+      jewellerPhone: accounts.phone,
+      jewellerSlug: accounts.profileSlug,
+      jewellerProfileStatus: accounts.profileStatus,
       requestTitle: requests.title,
       requestCategory: requests.category,
       requestImageUrl: requests.imageUrl,
@@ -786,4 +793,195 @@ export async function getAdminStats() {
     activeChats: Number(activeChatRows?.count ?? 0),
     pendingReports: Number(pendingReportRows?.count ?? 0),
   };
+}
+
+// ─── Jeweller Profiles ───────────────────────────────────────────────────────
+
+/** Profile fields a jeweller may edit themselves. */
+export type JewellerProfilePatch = {
+  businessName?: string | null;
+  categories?: string | null;
+  city?: string | null;
+  address?: string | null;
+  website?: string | null;
+  instagramUrl?: string | null;
+  about?: string | null;
+  logoUrl?: string | null;
+  whatsappNumber?: string | null;
+};
+
+export type ProfileStatus = "draft" | "pending" | "approved" | "rejected" | "suspended";
+
+/**
+ * Turn a business name into a URL-safe slug. Falls back to the account id when
+ * the name yields nothing usable (e.g. non-Latin script only).
+ */
+export function slugifyBusinessName(name: string, accountId: number): string {
+  const base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return base ? `${base}-${accountId}` : `jeweller-${accountId}`;
+}
+
+/** Update editable profile fields. Does not touch moderation state. */
+export async function updateJewellerProfile(
+  jewellerId: number,
+  patch: JewellerProfilePatch
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const set: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) set[key] = value;
+  }
+  if (Object.keys(set).length === 0) return;
+  await db.update(accounts).set(set).where(eq(accounts.id, jewellerId));
+}
+
+/** Assign a profile slug if the account does not already have one. */
+export async function ensureProfileSlug(jewellerId: number, businessName: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getAccountById(jewellerId);
+  if (existing?.profileSlug) return existing.profileSlug;
+  const slug = slugifyBusinessName(businessName, jewellerId);
+  await db.update(accounts).set({ profileSlug: slug }).where(eq(accounts.id, jewellerId));
+  return slug;
+}
+
+/** Move a profile through its moderation lifecycle. */
+export async function setProfileStatus(
+  jewellerId: number,
+  status: ProfileStatus,
+  reviewNote?: string | null
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const set: Record<string, unknown> = { profileStatus: status };
+  if (reviewNote !== undefined) set.profileReviewNote = reviewNote;
+  if (status === "approved") set.profileApprovedAt = new Date();
+  await db.update(accounts).set(set).where(eq(accounts.id, jewellerId));
+}
+
+/** Public profile lookup by slug. Only ever returns an approved profile. */
+export async function getApprovedJewellerBySlug(slug: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(accounts)
+    .where(
+      and(
+        eq(accounts.profileSlug, slug),
+        eq(accounts.role, "jeweller"),
+        eq(accounts.profileStatus, "approved")
+      )
+    )
+    .limit(1);
+  return rows[0];
+}
+
+/** Public directory listing: approved jewellers only, newest approvals first. */
+export async function listApprovedJewellers(category?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select()
+    .from(accounts)
+    .where(and(eq(accounts.role, "jeweller"), eq(accounts.profileStatus, "approved")))
+    .orderBy(desc(accounts.profileApprovedAt));
+  if (!category) return rows;
+  return rows.filter(r => (r.categories ?? "").split(",").includes(category));
+}
+
+/** Admin view: jewellers filtered by moderation state. */
+export async function listJewellersByProfileStatus(status?: ProfileStatus) {
+  const db = await getDb();
+  if (!db) return [];
+  const where = status
+    ? and(eq(accounts.role, "jeweller"), eq(accounts.profileStatus, status))
+    : eq(accounts.role, "jeweller");
+  return db.select().from(accounts).where(where).orderBy(desc(accounts.createdAt));
+}
+
+// ─── Portfolio Items ─────────────────────────────────────────────────────────
+
+export async function createPortfolioItem(item: InsertPortfolioItem) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(portfolioItems).values(item);
+  return Number(result[0].insertId);
+}
+
+/** Every portfolio item for a jeweller, for their own editor view. */
+export async function getPortfolioForJeweller(jewellerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(portfolioItems)
+    .where(eq(portfolioItems.jewellerId, jewellerId))
+    .orderBy(portfolioItems.sortOrder, desc(portfolioItems.createdAt));
+}
+
+/**
+ * Portfolio items for a public profile view.
+ *
+ * Uploaded work is public. Quoted work is only returned to logged-in viewers,
+ * and only when the jeweller has promoted it, because it derives from a
+ * specific buyer's commission.
+ */
+export async function getVisiblePortfolio(jewellerId: number, viewerIsLoggedIn: boolean) {
+  const all = await getPortfolioForJeweller(jewellerId);
+  return all.filter(item => {
+    if (item.source === "uploaded") return true;
+    return viewerIsLoggedIn && item.isPromoted;
+  });
+}
+
+export async function getPortfolioItemById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(portfolioItems).where(eq(portfolioItems.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function updatePortfolioItem(
+  id: number,
+  patch: { caption?: string | null; sortOrder?: number; isPromoted?: boolean }
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const set: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) set[key] = value;
+  }
+  if (Object.keys(set).length === 0) return;
+  await db.update(portfolioItems).set(set).where(eq(portfolioItems.id, id));
+}
+
+export async function deletePortfolioItem(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(portfolioItems).where(eq(portfolioItems.id, id));
+}
+
+/** Count of uploaded portfolio images, used for directory previews. */
+export async function getPortfolioCount(jewellerId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db
+    .select({ count: sql<number>`count(*)` })
+    .from(portfolioItems)
+    .where(and(eq(portfolioItems.jewellerId, jewellerId), eq(portfolioItems.source, "uploaded")));
+  return Number(row?.count ?? 0);
+}
+
+/** Hard-delete an account. Used by test teardown; not exposed to any router. */
+export async function deleteAccountById(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(accounts).where(eq(accounts.id, id));
 }

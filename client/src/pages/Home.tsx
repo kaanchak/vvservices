@@ -129,6 +129,9 @@ export default function Home() {
         <div className="container flex h-16 items-center justify-between">
           <Logo />
           <nav className="hidden items-center gap-6 text-sm font-medium text-neutral-600 md:flex">
+            <Link href="/jewellers" className="transition-colors hover:text-[#8a6d1c]">
+              Browse jewellers
+            </Link>
             <a href="#how-it-works" className="transition-colors hover:text-[#8a6d1c]">
               How it works
             </a>
@@ -210,6 +213,13 @@ export default function Home() {
                 </Button>
               </Link>
             </div>
+            <Link
+              href="/jewellers"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-[#8a6d1c] underline-offset-4 transition-colors hover:underline"
+            >
+              Or browse verified jewellers
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
             <div className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-neutral-500">
               <span className="flex items-center gap-2">
                 <BadgeCheck className="h-4 w-4 text-[#D4AF37]" /> Verified manufacturers

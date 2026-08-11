@@ -27,20 +27,352 @@ import {
   AlertTriangle,
   BadgeCheck,
   CheckCircle2,
+  ExternalLink,
   FileText,
   Flag,
   Gem,
+  Globe,
+  Instagram,
   ListChecks,
+  MapPin,
   MessageSquare,
   ShieldAlert,
   Store,
+  Trash2,
   Users,
+  XCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 
 const adminNav = [{ href: "/admin", label: "Dashboard" }];
+
+/** Colour-coded pill for the profile moderation state. */
+function ProfileStatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    draft: "bg-neutral-100 text-neutral-600 border-neutral-200",
+    pending: "bg-amber-50 text-amber-700 border-amber-200",
+    approved: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    rejected: "bg-red-50 text-red-700 border-red-200",
+    suspended: "bg-red-100 text-red-800 border-red-300",
+  };
+  const label: Record<string, string> = {
+    draft: "Draft",
+    pending: "Pending review",
+    approved: "Live",
+    rejected: "Changes needed",
+    suspended: "Suspended",
+  };
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+        map[status] ?? map.draft
+      }`}
+    >
+      {label[status] ?? status}
+    </span>
+  );
+}
+
+/**
+ * Full review screen for one jeweller profile. Admin runs offline legitimacy
+ * checks, then approves, requests changes, or suspends.
+ */
+function ReviewProfileDialog({
+  jewellerId,
+  onClose,
+}: {
+  jewellerId: number | null;
+  onClose: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const [note, setNote] = useState("");
+  const { data, isLoading } = trpc.admin.jewellerProfileDetail.useQuery(
+    { jewellerId: jewellerId! },
+    { enabled: !!jewellerId }
+  );
+
+  const setStatus = trpc.admin.setJewellerProfileStatus.useMutation({
+    onSuccess: (_res, vars) => {
+      const verb =
+        vars.status === "approved"
+          ? "published"
+          : vars.status === "rejected"
+            ? "sent back for changes"
+            : vars.status === "suspended"
+              ? "suspended"
+              : "moved back to review";
+      toast.success(`Profile ${verb}.`);
+      utils.admin.invalidate();
+      setNote("");
+      onClose();
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const removeItem = trpc.admin.removePortfolioItem.useMutation({
+    onSuccess: () => {
+      toast.success("Photo removed.");
+      utils.admin.invalidate();
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const displayName = data?.businessName || data?.name || "Jeweller";
+  const uploaded = (data?.portfolio ?? []).filter(p => p.source === "uploaded");
+  const quoted = (data?.portfolio ?? []).filter(p => p.source === "quoted");
+
+  return (
+    <Dialog open={!!jewellerId} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-serif text-2xl">Review profile</DialogTitle>
+          <DialogDescription>
+            Verify this jeweller offline before publishing their public page.
+          </DialogDescription>
+        </DialogHeader>
+
+        {isLoading || !data ? (
+          <div className="space-y-3 py-4">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="h-16 animate-pulse rounded-xl bg-neutral-100" />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {/* Identity */}
+            <div className="flex items-start gap-4">
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-[#D4AF37]/30 bg-gold-gradient">
+                {data.logoUrl ? (
+                  <img src={data.logoUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <span className="font-serif text-xl font-semibold text-[#1A1A1A]">
+                    {displayName.charAt(0)}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-lg font-semibold leading-tight">{displayName}</p>
+                  <ProfileStatusBadge status={data.profileStatus ?? "draft"} />
+                  {data.incidentCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                      <ShieldAlert className="h-3 w-3" /> {data.incidentCount} incident
+                      {data.incidentCount === 1 ? "" : "s"}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-sm text-neutral-500">
+                  {data.name}
+                  {data.email ? ` · ${data.email}` : ""}
+                  {data.whatsappNumber ? ` · ${data.whatsappNumber}` : ""}
+                </p>
+                {data.categoryList.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {data.categoryList.map(c => (
+                      <CategoryBadge key={c} category={c} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Details to verify */}
+            <div className="rounded-xl border border-border bg-[#faf9f6] p-4">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                Details to verify
+              </p>
+              <dl className="space-y-2.5 text-sm">
+                <div className="flex gap-2">
+                  <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#8a6d1c]" />
+                  <div className="min-w-0">
+                    <dt className="text-xs text-neutral-400">Address</dt>
+                    <dd className="whitespace-pre-line text-neutral-700">
+                      {data.address || <span className="text-red-600">Not provided</span>}
+                    </dd>
+                    {data.city && <dd className="text-xs text-neutral-500">{data.city}</dd>}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Globe className="mt-0.5 h-4 w-4 shrink-0 text-[#8a6d1c]" />
+                  <div className="min-w-0">
+                    <dt className="text-xs text-neutral-400">Website</dt>
+                    <dd className="truncate text-neutral-700">
+                      {data.website ? (
+                        <a
+                          href={
+                            /^https?:\/\//i.test(data.website)
+                              ? data.website
+                              : `https://${data.website}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 underline underline-offset-2"
+                        >
+                          {data.website} <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
+                      )}
+                    </dd>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Instagram className="mt-0.5 h-4 w-4 shrink-0 text-[#8a6d1c]" />
+                  <div className="min-w-0">
+                    <dt className="text-xs text-neutral-400">Instagram</dt>
+                    <dd className="truncate text-neutral-700">
+                      {data.instagramUrl ? (
+                        <a
+                          href={
+                            /^https?:\/\//i.test(data.instagramUrl)
+                              ? data.instagramUrl
+                              : `https://${data.instagramUrl}`
+                          }
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 underline underline-offset-2"
+                        >
+                          {data.instagramUrl} <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
+                      )}
+                    </dd>
+                  </div>
+                </div>
+              </dl>
+              {data.about && (
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="text-xs text-neutral-400">About</p>
+                  <p className="mt-1 whitespace-pre-line text-sm leading-relaxed text-neutral-600">
+                    {data.about}
+                  </p>
+                </div>
+              )}
+              {data.profileSlug && (
+                <p className="mt-3 border-t border-border pt-3 text-xs text-neutral-500">
+                  Public URL:{" "}
+                  <a
+                    href={`/j/${data.profileSlug}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium underline underline-offset-2"
+                  >
+                    /j/{data.profileSlug}
+                  </a>
+                </p>
+              )}
+            </div>
+
+            {/* Portfolio */}
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                Uploaded photos ({uploaded.length}) — public
+              </p>
+              {uploaded.length === 0 ? (
+                <p className="text-sm text-neutral-500">No photos uploaded.</p>
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  {uploaded.map(item => (
+                    <div
+                      key={item.id}
+                      className="group relative aspect-square overflow-hidden rounded-lg border border-neutral-200"
+                    >
+                      <img
+                        src={item.imageUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Remove photo"
+                        onClick={() => removeItem.mutate({ itemId: item.id })}
+                        className="absolute right-1 top-1 rounded-full bg-white/90 p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                      >
+                        <Trash2 className="h-3 w-3 text-red-600" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {quoted.length > 0 && (
+                <p className="mt-2 text-xs text-neutral-500">
+                  Plus {quoted.length} quoted design{quoted.length === 1 ? "" : "s"} (members
+                  only).
+                </p>
+              )}
+            </div>
+
+            {/* Review note */}
+            <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                Note to jeweller (shown if you request changes or suspend)
+              </p>
+              <Textarea
+                rows={2}
+                maxLength={1000}
+                placeholder="e.g. Shop address could not be verified — please share a GST certificate."
+                value={note}
+                onChange={e => setNote(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        <DialogFooter className="flex-col gap-2 sm:flex-row">
+          {data?.profileStatus === "approved" ? (
+            <Button
+              variant="outline"
+              className="w-full gap-2 border-red-200 bg-red-50 text-red-700 hover:bg-red-100 sm:w-auto"
+              disabled={setStatus.isPending}
+              onClick={() =>
+                setStatus.mutate({
+                  jewellerId: jewellerId!,
+                  status: "suspended",
+                  reviewNote: note || undefined,
+                })
+              }
+            >
+              <XCircle className="h-4 w-4" /> Suspend profile
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                className="w-full gap-2 border-red-200 bg-red-50 text-red-700 hover:bg-red-100 sm:w-auto"
+                disabled={setStatus.isPending}
+                onClick={() => {
+                  if (!note.trim()) {
+                    return toast.error("Please add a note explaining what needs changing.");
+                  }
+                  setStatus.mutate({
+                    jewellerId: jewellerId!,
+                    status: "rejected",
+                    reviewNote: note,
+                  });
+                }}
+              >
+                <XCircle className="h-4 w-4" /> Request changes
+              </Button>
+              <Button
+                className="w-full gap-2 bg-emerald-600 text-white hover:bg-emerald-700 sm:w-auto"
+                disabled={setStatus.isPending}
+                onClick={() =>
+                  setStatus.mutate({ jewellerId: jewellerId!, status: "approved" })
+                }
+              >
+                <CheckCircle2 className="h-4 w-4" /> Approve and publish
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function StatCard({
   icon: Icon,
@@ -182,6 +514,8 @@ export default function AdminPanel() {
   const { data: pendingReports } = trpc.admin.pendingReports.useQuery(undefined, { enabled });
   const { data: allReports } = trpc.admin.allReports.useQuery(undefined, { enabled });
   const { data: incidents } = trpc.admin.jewellersIncidents.useQuery(undefined, { enabled });
+  const { data: profiles } = trpc.admin.jewellerProfiles.useQuery(undefined, { enabled });
+  const [reviewingId, setReviewingId] = useState<number | null>(null);
 
   useSocket({
     "admin-update": () => {
@@ -192,6 +526,7 @@ export default function AdminPanel() {
   const buyers = accounts?.filter(a => a.role === "buyer") ?? [];
   const jewellers = accounts?.filter(a => a.role === "jeweller") ?? [];
   const pendingCount = pendingReports?.length ?? 0;
+  const pendingProfiles = (profiles ?? []).filter(p => p.profileStatus === "pending");
 
   return (
     <AppShell nav={adminNav} requiredRole="admin" loginPath="/login">
@@ -239,6 +574,15 @@ export default function AdminPanel() {
           <TabsTrigger value="incidents">
             <ShieldAlert className="h-3.5 w-3.5 mr-1" />
             Incidents
+          </TabsTrigger>
+          <TabsTrigger value="profiles" className="relative">
+            <BadgeCheck className="mr-1 h-3.5 w-3.5" />
+            Profiles
+            {pendingProfiles.length > 0 && (
+              <span className="ml-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white">
+                {pendingProfiles.length}
+              </span>
+            )}
           </TabsTrigger>
         </TabsList>
 
@@ -573,7 +917,116 @@ export default function AdminPanel() {
             </Table>
           </div>
         </TabsContent>
+
+        {/* ── Jeweller Profile Moderation ── */}
+        <TabsContent value="profiles">
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <BadgeCheck className="mr-1.5 inline h-4 w-4 text-amber-600" />
+            Profiles stay private until you approve them. Run your offline legitimacy checks
+            first, then publish.
+          </div>
+          <div className="luxury-shadow overflow-x-auto rounded-2xl border border-[#D4AF37]/15 bg-white">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Jeweller</TableHead>
+                  <TableHead>City</TableHead>
+                  <TableHead>Categories</TableHead>
+                  <TableHead>Photos</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Public URL</TableHead>
+                  <TableHead className="text-right">Action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(profiles ?? []).length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-10 text-center text-sm text-neutral-500">
+                      No jeweller profiles yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  (profiles ?? []).map(p => (
+                    <TableRow key={p.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gold-gradient">
+                            {p.logoUrl ? (
+                              <img src={p.logoUrl} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <span className="font-serif text-sm font-semibold text-[#1A1A1A]">
+                                {(p.businessName || p.name || "J").charAt(0)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">
+                              {p.businessName || p.name || "—"}
+                            </p>
+                            <p className="truncate text-xs text-neutral-500">{p.email}</p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>{p.city ?? "—"}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {p.categoryList.length > 0
+                            ? p.categoryList.map(c => <CategoryBadge key={c} category={c} />)
+                            : "—"}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm">
+                          {p.uploadedCount}
+                          {p.portfolioCount > p.uploadedCount && (
+                            <span className="text-neutral-400">
+                              {" "}
+                              (+{p.portfolioCount - p.uploadedCount})
+                            </span>
+                          )}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <ProfileStatusBadge status={p.profileStatus ?? "draft"} />
+                      </TableCell>
+                      <TableCell>
+                        {p.profileStatus === "approved" && p.profileSlug ? (
+                          <a
+                            href={`/j/${p.profileSlug}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-[#8a6d1c] underline underline-offset-2"
+                          >
+                            /j/{p.profileSlug} <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          <span className="text-xs text-neutral-400">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant={p.profileStatus === "pending" ? "default" : "outline"}
+                          className={
+                            p.profileStatus === "pending"
+                              ? "bg-gold-gradient font-semibold text-[#1A1A1A] hover:opacity-90"
+                              : ""
+                          }
+                          onClick={() => setReviewingId(p.id)}
+                        >
+                          {p.profileStatus === "pending" ? "Review" : "Open"}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </TabsContent>
       </Tabs>
+
+      <ReviewProfileDialog jewellerId={reviewingId} onClose={() => setReviewingId(null)} />
     </AppShell>
   );
 }

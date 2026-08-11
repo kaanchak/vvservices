@@ -133,4 +133,58 @@
 ### Tests + Checkpoint
 - [x] Vitest: convertToInr (6 cases including the exact $45,600 bug), parsePriceString (10 cases)
 - [x] 72/72 tests passing, tsc clean
+- [x] Checkpoint saved (version: fa030548)
+
+## Phase 4 — MSG91 WhatsApp OTP (BLOCKED)
+
+- [x] Add MSG91 credentials as project secrets
+- [x] Rewrite server/whatsappAuth.ts to send OTP via MSG91 WhatsApp template API
+- [x] Vitest: credential validation + payload shape (8 tests passing)
+- [ ] BLOCKED: MSG91 accepts the send (HTTP 200, request_id returned) but messages do not deliver — Meta-side WABA/template verification incomplete. User will resolve Meta verification later. Mock-mode fallback keeps login working meanwhile.
+- [ ] Remove server/whatsappAuth.livesend.test.ts probe file once delivery confirmed
+
+## Phase 5 — Pivot to Discovery Platform + Jeweller Profiles
+
+### Remove transactional affordances
+- [x] Remove "Add to Cart" / buy button from chat official quote card
+- [x] Remove the contact permission gate: buyer quote cards now carry direct WhatsApp + Profile buttons on any non-dismissed quote, no acceptance required
+- [x] Audit for any other checkout/cart/order affordances and remove (placeOrder mutation, myOrders query, Order Placed panel, order-framing copy)
+
+### Schema
+- [x] Add jeweller profile fields to accounts: address, website, instagramUrl, about, logoUrl, profileStatus (draft/pending/approved/rejected/suspended), profileSlug, profileReviewNote, profileApprovedAt
+- [x] Add `portfolioItems` table (jewellerId, imageUrl, caption, sortOrder, source: uploaded|quoted, requestId nullable, isPromoted)
+- [x] Generate and apply migration SQL (0007_first_dark_phoenix.sql)
+
+### Backend
+- [x] db helpers: getApprovedJewellerBySlug, listApprovedJewellers, listJewellersByProfileStatus, updateJewellerProfile, ensureProfileSlug, setProfileStatus, portfolio CRUD, getVisiblePortfolio
+- [x] tRPC jewellers router: publicProfile, directory, myProfile, updateProfile, uploadLogo, submitForReview, addPortfolioImage, updatePortfolioItem, deletePortfolioItem, quotedWorkCandidates, promoteQuotedWork
+- [x] tRPC admin moderation: jewellerProfiles, jewellerProfileDetail, setJewellerProfileStatus, editJewellerProfile, removePortfolioItem
+- [x] Quoted work visibility enforced in getVisiblePortfolio: uploaded is public, quoted requires logged-in viewer AND isPromoted
+
+### Frontend — Jeweller
+- [x] Profile editor page at /jeweller/profile: business name, categories, city, address, website, Instagram, about, WhatsApp number, logo upload
+- [x] Portfolio manager: multi-upload, delete, quoted-work section with removal
+- [x] Profile status banner (draft / pending / approved / rejected / suspended) with readiness checklist and public-profile link
+- [x] "My Profile" added to jeweller nav
+### Frontend — Public
+- [x] Public jeweller profile page at /j/:slug — logo, name, verified badge, categories, about, address, website link, Instagram link, WhatsApp chat button (wa.me), image lightbox
+- [x] Quoted-work section gated to logged-in users with a sign-in prompt for guests
+- [x] Browsable jeweller directory at /jewellers with category filter, name/city search, and 3-image preview strip
+- [x] Routes registered in App.tsx; "Browse jewellers" links added to the home nav and hero
+- [x] Route namespace chosen as /j/:slug to avoid colliding with the /jeweller/* dashboard routes
+
+### Frontend — Admin
+- [x] Admin "Profiles" tab with pending-count badge: table of every jeweller profile showing logo, name, email, city, categories, photo counts, status pill, and public URL
+- [x] Review dialog: full detail with address/website/Instagram/about to verify, incident count warning, portfolio grid, review note field, and Approve / Request changes / Suspend actions
+- [x] Admin can remove portfolio images from the review dialog
+
+### Tests + Checkpoint
+- [x] Vitest server/jewellerProfile.test.ts — 17 tests: slug generation (incl. route-collision safety), approval state machine (draft → pending → approved → suspended), review notes, partial profile patches, and portfolio visibility gating
+- [x] Tests self-clean via afterAll teardown so approved test profiles no longer leak into the public directory
+- [x] Removed the temporary live MSG91 send probe test
+- [x] 89/89 tests passing across 9 files, tsc clean
 - [ ] Checkpoint saved
+
+## Reminders (raised by user, to revisit)
+- [ ] REMINDER: revisit/redesign the quotation flow
+- [ ] REMINDER: WhatsApp OTP login once Meta verification clears

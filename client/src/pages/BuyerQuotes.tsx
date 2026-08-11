@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { useAccount } from "@/hooks/useAccount";
 import { useSocket } from "@/hooks/useSocket";
 import { trpc } from "@/lib/trpc";
-import { Check, Gem, MapPin, MessageSquare, Star, X } from "lucide-react";
+import { Check, Gem, MapPin, MessageSquare, Star, Store, X } from "lucide-react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 
@@ -47,6 +47,8 @@ function QuoteCard({
   businessName,
   rating,
   city,
+  jewellerWhatsapp,
+  jewellerSlug,
   requestTitle,
   onStatus,
   pending,
@@ -68,6 +70,8 @@ function QuoteCard({
   businessName?: string | null;
   rating?: string | null;
   city?: string | null;
+  jewellerWhatsapp?: string | null;
+  jewellerSlug?: string | null;
   requestTitle?: string | null;
   onStatus: (quoteId: number, status: "accepted" | "dismissed") => void;
   pending: boolean;
@@ -76,6 +80,14 @@ function QuoteCard({
   const displayName = businessName || jewellerName || "Jeweller";
   const isAccepted = quote.status === "accepted";
   const isDismissed = quote.status === "dismissed";
+  const waDigits = jewellerWhatsapp?.replace(/\D/g, "");
+  const waLink = waDigits
+    ? `https://wa.me/${waDigits}?text=${encodeURIComponent(
+        `Hi ${displayName}, I saw your quote on VVServices${
+          requestTitle ? ` for "${requestTitle}"` : ""
+        } and would like to discuss it.`
+      )}`
+    : null;
 
   return (
     <div
@@ -187,13 +199,38 @@ function QuoteCard({
         </div>
       )}
 
-      {/* Open Chat button for accepted quotes */}
+      {/* Contact the jeweller directly — no acceptance required */}
+      {!isDismissed && (waLink || jewellerSlug) && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {waLink && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-2 border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+              onClick={() => window.open(waLink, "_blank", "noopener,noreferrer")}
+            >
+              <MessageSquare className="h-4 w-4" /> WhatsApp
+            </Button>
+          )}
+          {jewellerSlug && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-2"
+              onClick={() =>
+                window.open(`/j/${jewellerSlug}`, "_blank", "noopener,noreferrer")
+              }
+            >
+              <Store className="h-4 w-4" /> Profile
+            </Button>
+          )}
+        </div>
+      )}
+
       {isAccepted && (
         <Button
-          className="mt-4 w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+          className="mt-2 w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
           onClick={() => onOpenChat(quote.id)}
         >
-          <MessageSquare className="h-4 w-4" /> Open Chat
+          <MessageSquare className="h-4 w-4" /> Open chat on VVServices
         </Button>
       )}
     </div>
@@ -219,7 +256,7 @@ export default function BuyerQuotes({ requestId }: { requestId?: number }) {
     onSuccess: (data, vars) => {
       toast.success(
         vars.status === "accepted"
-          ? "Quote accepted! Chat is now open."
+          ? "Quote accepted — chat is open."
           : "Quote dismissed."
       );
       utils.quotes.invalidate();
@@ -314,6 +351,10 @@ export default function BuyerQuotes({ requestId }: { requestId?: number }) {
                 businessName={row.businessName}
                 rating={row.rating}
                 city={row.city}
+                jewellerWhatsapp={row.jewellerWhatsapp}
+                jewellerSlug={
+                  row.jewellerProfileStatus === "approved" ? row.jewellerSlug : null
+                }
                 requestTitle={requestId ? undefined : row.requestTitle}
                 pending={setStatus.isPending}
                 onStatus={(quoteId, status) => setStatus.mutate({ quoteId, status })}

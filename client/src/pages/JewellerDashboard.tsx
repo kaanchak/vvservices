@@ -25,6 +25,7 @@ export const jewellerNav = [
   { href: "/jeweller", label: "Lead Feed" },
   { href: "/jeweller/quotes", label: "My Quotes" },
   { href: "/jeweller/chats", label: "Chats" },
+  { href: "/jeweller/profile", label: "My Profile" },
 ];
 
 interface ScrapedProduct {

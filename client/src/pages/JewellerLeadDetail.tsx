@@ -176,7 +176,7 @@ function QuoteForm({
               <div>
                 <p className="font-semibold text-emerald-800">Buyer accepted your quote!</p>
                 <p className="text-sm text-emerald-700">
-                  Chat is now unlocked. Discuss details and finalise the order.
+                  Chat is open. Discuss the details directly with the buyer.
                 </p>
               </div>
             </div>

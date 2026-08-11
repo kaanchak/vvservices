@@ -1070,6 +1070,121 @@ export const appRouter = router({
     /** Jeweller incidents tracker. */
     jewellersIncidents: vvAdminProcedure.query(() => db.getJewellerIncidents()),
 
+    /**
+     * Jeweller profiles for moderation, optionally filtered by state.
+     * Passwords are never returned.
+     */
+    jewellerProfiles: vvAdminProcedure
+      .input(
+        z
+          .object({
+            status: z
+              .enum(["draft", "pending", "approved", "rejected", "suspended"])
+              .optional(),
+          })
+          .optional()
+      )
+      .query(async ({ input }) => {
+        const list = await db.listJewellersByProfileStatus(input?.status);
+        return Promise.all(
+          list.map(async a => {
+            const { passwordHash, ...rest } = a;
+            const portfolio = await db.getPortfolioForJeweller(a.id);
+            return {
+              ...rest,
+              categoryList: (a.categories ?? "").split(",").filter(Boolean),
+              portfolioCount: portfolio.length,
+              uploadedCount: portfolio.filter(p => p.source === "uploaded").length,
+            };
+          })
+        );
+      }),
+
+    /** Full profile detail for the admin review screen. */
+    jewellerProfileDetail: vvAdminProcedure
+      .input(z.object({ jewellerId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const jeweller = await db.getAccountById(input.jewellerId);
+        if (!jeweller || jeweller.role !== "jeweller") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller not found" });
+        }
+        const { passwordHash, ...rest } = jeweller;
+        const portfolio = await db.getPortfolioForJeweller(jeweller.id);
+        const incidentCount = await db.getJewellerIncidentCount(jeweller.id);
+        return {
+          ...rest,
+          categoryList: (jeweller.categories ?? "").split(",").filter(Boolean),
+          portfolio,
+          incidentCount,
+        };
+      }),
+
+    /**
+     * Move a profile through moderation. Approving publishes it, which also
+     * assigns a slug if the jeweller does not have one yet.
+     */
+    setJewellerProfileStatus: vvAdminProcedure
+      .input(
+        z.object({
+          jewellerId: z.number().int().positive(),
+          status: z.enum(["approved", "rejected", "suspended", "pending"]),
+          reviewNote: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const jeweller = await db.getAccountById(input.jewellerId);
+        if (!jeweller || jeweller.role !== "jeweller") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller not found" });
+        }
+        if (input.status === "rejected" || input.status === "suspended") {
+          if (!input.reviewNote?.trim()) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Please give a reason — the jeweller sees this note.",
+            });
+          }
+        }
+        if (input.status === "approved") {
+          if (!jeweller.businessName) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Cannot approve a profile without a business name.",
+            });
+          }
+          await db.ensureProfileSlug(jeweller.id, jeweller.businessName);
+        }
+        await db.setProfileStatus(input.jewellerId, input.status, input.reviewNote ?? null);
+        return { success: true } as const;
+      }),
+
+    /** Admin can correct profile fields during review. */
+    editJewellerProfile: vvAdminProcedure
+      .input(
+        z.object({
+          jewellerId: z.number().int().positive(),
+          businessName: z.string().max(191).optional(),
+          city: z.string().max(191).optional(),
+          address: z.string().max(500).optional(),
+          website: z.string().max(500).optional(),
+          instagramUrl: z.string().max(500).optional(),
+          about: z.string().max(2000).optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const { jewellerId, ...patch } = input;
+        await db.updateJewellerProfile(jewellerId, patch);
+        return { success: true } as const;
+      }),
+
+    /** Admin can take down an inappropriate portfolio image. */
+    removePortfolioItem: vvAdminProcedure
+      .input(z.object({ itemId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        await db.deletePortfolioItem(input.itemId);
+        return { success: true } as const;
+      }),
+
+
     /** Get full thread detail for admin (same as user getThread but no ownership check). */
     getThread: vvAdminProcedure
       .input(z.object({ threadId: z.number().int().positive() }))
@@ -1103,6 +1218,319 @@ export const appRouter = router({
             : null,
           requotes: allRequotes,
         };
+      }),
+  }),
+
+  // --- Jeweller Profiles ------------------------------------------------------
+  jewellers: router({
+    /**
+     * Public profile by slug. Only approved profiles resolve.
+     * Quoted work is withheld unless the viewer is logged in, since it derives
+     * from a specific buyer's commission.
+     */
+    publicProfile: publicProcedure
+      .input(z.object({ slug: z.string().min(1).max(191) }))
+      .query(async ({ ctx, input }) => {
+        const jeweller = await db.getApprovedJewellerBySlug(input.slug);
+        if (!jeweller) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Jeweller profile not found" });
+        }
+        const viewerIsLoggedIn = !!ctx.account;
+        const portfolio = await db.getVisiblePortfolio(jeweller.id, viewerIsLoggedIn);
+        return {
+          id: jeweller.id,
+          name: jeweller.name,
+          businessName: jeweller.businessName,
+          categories: (jeweller.categories ?? "").split(",").filter(Boolean),
+          city: jeweller.city,
+          address: jeweller.address,
+          website: jeweller.website,
+          instagramUrl: jeweller.instagramUrl,
+          about: jeweller.about,
+          logoUrl: jeweller.logoUrl,
+          rating: jeweller.rating,
+          profileSlug: jeweller.profileSlug,
+          whatsappNumber: jeweller.whatsappNumber,
+          portfolio,
+          viewerIsLoggedIn,
+        };
+      }),
+
+    /** Public directory of approved jewellers, optionally filtered by category. */
+    directory: publicProcedure
+      .input(z.object({ category: categoryEnum.optional() }).optional())
+      .query(async ({ input }) => {
+        const list = await db.listApprovedJewellers(input?.category);
+        return Promise.all(
+          list.map(async j => {
+            const portfolio = await db.getVisiblePortfolio(j.id, false);
+            return {
+              id: j.id,
+              name: j.name,
+              businessName: j.businessName,
+              categories: (j.categories ?? "").split(",").filter(Boolean),
+              city: j.city,
+              logoUrl: j.logoUrl,
+              rating: j.rating,
+              profileSlug: j.profileSlug,
+              about: j.about,
+              previewImages: portfolio.slice(0, 3).map(p => p.imageUrl),
+              portfolioCount: portfolio.length,
+            };
+          })
+        );
+      }),
+
+    /** The logged-in jeweller's own profile, including moderation state. */
+    myProfile: jewellerProcedure.query(async ({ ctx }) => {
+      const me = await db.getAccountById(ctx.account.accountId);
+      if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+      const portfolio = await db.getPortfolioForJeweller(me.id);
+      return {
+        id: me.id,
+        name: me.name,
+        businessName: me.businessName,
+        categories: (me.categories ?? "").split(",").filter(Boolean),
+        city: me.city,
+        address: me.address,
+        website: me.website,
+        instagramUrl: me.instagramUrl,
+        about: me.about,
+        logoUrl: me.logoUrl,
+        whatsappNumber: me.whatsappNumber,
+        profileSlug: me.profileSlug,
+        profileStatus: me.profileStatus,
+        profileReviewNote: me.profileReviewNote,
+        profileApprovedAt: me.profileApprovedAt,
+        portfolio,
+      };
+    }),
+
+    /** Save editable profile fields. Editing a live profile does not unpublish it. */
+    updateProfile: jewellerProcedure
+      .input(
+        z.object({
+          businessName: z.string().min(1).max(191).optional(),
+          categories: z.array(categoryEnum).max(3).optional(),
+          city: z.string().max(191).optional(),
+          address: z.string().max(500).optional(),
+          website: z.string().max(500).optional(),
+          instagramUrl: z.string().max(500).optional(),
+          about: z.string().max(2000).optional(),
+          whatsappNumber: z.string().max(32).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        await db.updateJewellerProfile(ctx.account.accountId, {
+          businessName: input.businessName,
+          categories: input.categories ? input.categories.join(",") : undefined,
+          city: input.city,
+          address: input.address,
+          website: input.website,
+          instagramUrl: input.instagramUrl,
+          about: input.about,
+          whatsappNumber: input.whatsappNumber
+            ? normalizeWhatsappNumber(input.whatsappNumber)
+            : undefined,
+        });
+        return { success: true } as const;
+      }),
+
+    /** Upload or replace the profile logo. */
+    uploadLogo: jewellerProcedure
+      .input(
+        z.object({
+          imageBase64: z.string().max(8_000_000),
+          mimeType: z.string().max(100).default("image/jpeg"),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const buffer = Buffer.from(input.imageBase64, "base64");
+        const ext = input.mimeType.split("/")[1] || "jpg";
+        const { url } = await storagePut(
+          `jewellers/${ctx.account.accountId}-logo-${Date.now()}.${ext}`,
+          buffer,
+          input.mimeType
+        );
+        await db.updateJewellerProfile(ctx.account.accountId, { logoUrl: url });
+        return { logoUrl: url };
+      }),
+
+    /**
+     * Submit the profile for admin review. Requires the fields a buyer needs in
+     * order to trust and contact the business.
+     */
+    submitForReview: jewellerProcedure.mutation(async ({ ctx }) => {
+      const me = await db.getAccountById(ctx.account.accountId);
+      if (!me) throw new TRPCError({ code: "NOT_FOUND", message: "Account not found" });
+
+      const missing: string[] = [];
+      const businessName = me.businessName;
+      if (!businessName) missing.push("business name");
+      if (!me.categories) missing.push("at least one category");
+      if (!me.city) missing.push("city");
+      if (!me.address) missing.push("address");
+      if (missing.length > 0 || !businessName) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Please add your ${missing.join(", ")} before submitting for review.`,
+        });
+      }
+      if (me.profileStatus === "approved") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Your profile is already live." });
+      }
+      if (me.profileStatus === "pending") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Your profile is already under review." });
+      }
+      if (me.profileStatus === "suspended") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Your profile is suspended. Please contact support.",
+        });
+      }
+
+      await db.ensureProfileSlug(me.id, businessName);
+      await db.setProfileStatus(me.id, "pending", null);
+      return { success: true } as const;
+    }),
+
+    /** Add an uploaded portfolio image. */
+    addPortfolioImage: jewellerProcedure
+      .input(
+        z.object({
+          imageBase64: z.string().max(8_000_000),
+          mimeType: z.string().max(100).default("image/jpeg"),
+          caption: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const existing = await db.getPortfolioForJeweller(ctx.account.accountId);
+        if (existing.length >= 30) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Portfolio limit reached (30 images). Remove one before adding more.",
+          });
+        }
+        const buffer = Buffer.from(input.imageBase64, "base64");
+        const ext = input.mimeType.split("/")[1] || "jpg";
+        const { url } = await storagePut(
+          `jewellers/${ctx.account.accountId}-portfolio-${Date.now()}.${ext}`,
+          buffer,
+          input.mimeType
+        );
+        const id = await db.createPortfolioItem({
+          jewellerId: ctx.account.accountId,
+          imageUrl: url,
+          caption: input.caption,
+          source: "uploaded",
+          sortOrder: existing.length,
+        });
+        return { id, imageUrl: url };
+      }),
+
+    /** Edit caption, order, or promotion state of one of your own items. */
+    updatePortfolioItem: jewellerProcedure
+      .input(
+        z.object({
+          itemId: z.number().int().positive(),
+          caption: z.string().max(500).optional(),
+          sortOrder: z.number().int().min(0).max(999).optional(),
+          isPromoted: z.boolean().optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const item = await db.getPortfolioItemById(input.itemId);
+        if (!item || item.jewellerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your portfolio item" });
+        }
+        await db.updatePortfolioItem(input.itemId, {
+          caption: input.caption,
+          sortOrder: input.sortOrder,
+          isPromoted: input.isPromoted,
+        });
+        return { success: true } as const;
+      }),
+
+    deletePortfolioItem: jewellerProcedure
+      .input(z.object({ itemId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const item = await db.getPortfolioItemById(input.itemId);
+        if (!item || item.jewellerId !== ctx.account.accountId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Not your portfolio item" });
+        }
+        await db.deletePortfolioItem(input.itemId);
+        return { success: true } as const;
+      }),
+
+    /**
+     * Designs from requests this jeweller has quoted on, offered as candidates
+     * for the portfolio. Promoting one copies it in as a 'quoted' item, which
+     * stays hidden from anonymous visitors.
+     */
+    quotedWorkCandidates: jewellerProcedure.query(async ({ ctx }) => {
+      const myQuotes = await db.getQuotesByJeweller(ctx.account.accountId);
+      const existing = await db.getPortfolioForJeweller(ctx.account.accountId);
+      const alreadyAdded = new Set(
+        existing.filter(e => e.source === "quoted" && e.requestId).map(e => e.requestId)
+      );
+      const candidates: {
+        requestId: number;
+        title: string;
+        imageUrl: string;
+        quoteStatus: string;
+        alreadyInPortfolio: boolean;
+      }[] = [];
+      for (const row of myQuotes) {
+        const request = (row as { request?: { id: number; title: string; imageUrl: string | null } })
+          .request;
+        const quote = (row as { quote?: { status: string } }).quote;
+        if (!request?.imageUrl) continue;
+        if (candidates.some(c => c.requestId === request.id)) continue;
+        candidates.push({
+          requestId: request.id,
+          title: request.title,
+          imageUrl: request.imageUrl,
+          quoteStatus: quote?.status ?? "pending",
+          alreadyInPortfolio: alreadyAdded.has(request.id),
+        });
+      }
+      return candidates;
+    }),
+
+    /** Promote a quoted design into the portfolio (logged-in viewers only). */
+    promoteQuotedWork: jewellerProcedure
+      .input(
+        z.object({
+          requestId: z.number().int().positive(),
+          caption: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const hasQuoted = await db.hasJewellerQuoted(input.requestId, ctx.account.accountId);
+        if (!hasQuoted) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You can only showcase designs you have quoted on.",
+          });
+        }
+        const request = await db.getRequestById(input.requestId);
+        if (!request?.imageUrl) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This design has no image." });
+        }
+        const existing = await db.getPortfolioForJeweller(ctx.account.accountId);
+        if (existing.some(e => e.source === "quoted" && e.requestId === input.requestId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Already in your portfolio." });
+        }
+        const id = await db.createPortfolioItem({
+          jewellerId: ctx.account.accountId,
+          imageUrl: request.imageUrl,
+          caption: input.caption,
+          source: "quoted",
+          requestId: input.requestId,
+          isPromoted: true,
+          sortOrder: existing.length,
+        });
+        return { id } as const;
       }),
   }),
 });

@@ -51,11 +51,64 @@ export const accounts = mysqlTable("accounts", {
   city: varchar("city", { length: 191 }),
   /** Jewellers only: display rating 0.0 - 5.0 */
   rating: decimal("rating", { precision: 2, scale: 1 }).default("4.5"),
+  /** Jewellers only: full shop address shown on the public profile */
+  address: varchar("address", { length: 500 }),
+  /** Jewellers only: own website URL */
+  website: varchar("website", { length: 500 }),
+  /** Jewellers only: Instagram profile URL */
+  instagramUrl: varchar("instagramUrl", { length: 500 }),
+  /** Jewellers only: short about/bio for the public profile */
+  about: varchar("about", { length: 2000 }),
+  /** Jewellers only: logo or shopfront image (S3 URL) */
+  logoUrl: varchar("logoUrl", { length: 1000 }),
+  /** Jewellers only: URL slug for the public profile, e.g. "vv-jewellers-jaipur" */
+  profileSlug: varchar("profileSlug", { length: 191 }).unique(),
+  /**
+   * Jewellers only: public profile moderation state.
+   * draft     = being filled in, never submitted
+   * pending   = submitted, awaiting admin offline legitimacy check
+   * approved  = live and publicly visible
+   * rejected  = admin declined; jeweller may revise and resubmit
+   * suspended = was live, taken down by admin
+   */
+  profileStatus: mysqlEnum("profileStatus", ["draft", "pending", "approved", "rejected", "suspended"])
+    .default("draft")
+    .notNull(),
+  /** Admin note explaining a rejection or suspension, shown to the jeweller */
+  profileReviewNote: varchar("profileReviewNote", { length: 1000 }),
+  /** When the profile was last approved (null if never) */
+  profileApprovedAt: timestamp("profileApprovedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
 export type Account = typeof accounts.$inferSelect;
 export type InsertAccount = typeof accounts.$inferInsert;
+
+/**
+ * Portfolio images shown on a jeweller's public profile.
+ *
+ * `source` drives two very different visibility rules:
+ *   uploaded = the jeweller's own portfolio image, publicly visible.
+ *   quoted   = work derived from a buyer request they quoted on. Visible only
+ *              to logged-in users, and only once the jeweller has promoted it.
+ */
+export const portfolioItems = mysqlTable("portfolioItems", {
+  id: int("id").autoincrement().primaryKey(),
+  jewellerId: int("jewellerId").notNull(),
+  imageUrl: varchar("imageUrl", { length: 1000 }).notNull(),
+  caption: varchar("caption", { length: 500 }),
+  /** Ascending display order within the jeweller's gallery */
+  sortOrder: int("sortOrder").default(0).notNull(),
+  source: mysqlEnum("source", ["uploaded", "quoted"]).default("uploaded").notNull(),
+  /** Set only when source = 'quoted': the request the work came from */
+  requestId: int("requestId"),
+  /** Quoted work appears on the profile only once explicitly promoted */
+  isPromoted: boolean("isPromoted").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PortfolioItem = typeof portfolioItems.$inferSelect;
+export type InsertPortfolioItem = typeof portfolioItems.$inferInsert;
 
 /** Buyer jewellery requests (leads for jewellers). */
 export const requests = mysqlTable("requests", {
