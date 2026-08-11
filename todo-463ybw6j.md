@@ -200,4 +200,4 @@
 - [x] Preserve URL scraping, up-to-five-photo persistence, real-time lead routing, and jeweller quote compatibility; buyer cards now hide the internal category and show one approximate budget
 - [x] Add server/shortRequestRouting.test.ts — 8 tests for 14KT/18KT, natural/lab-grown diamond, stone inference, no-guess routing, tRPC short-form compatibility, and all-category lead visibility
 - [x] 97/97 tests passing across 10 files; TypeScript clean; test teardown confirmed no profile or short-form test accounts remain in live data
-- [ ] Checkpoint and publish simplified request form
+- [x] Checkpoint and publish simplified request form (version: a0fafb57)
