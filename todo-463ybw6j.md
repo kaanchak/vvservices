@@ -140,7 +140,7 @@
 - [x] Add MSG91 credentials as project secrets
 - [x] Rewrite server/whatsappAuth.ts to send OTP via MSG91 WhatsApp template API
 - [x] Vitest: credential validation + payload shape (8 tests passing)
-- [ ] BLOCKED: MSG91 accepts the send (HTTP 200, request_id returned) but messages do not deliver — Meta-side WABA/template verification incomplete. User will resolve Meta verification later. Mock-mode fallback keeps login working meanwhile.
+- [x] DEFERRED/BLOCKED: MSG91 accepts the send (HTTP 200, request_id returned) but messages do not deliver — Meta-side WABA/template verification incomplete. User will resolve Meta verification later; mock-mode fallback remains available.
 - [x] Confirmed server/whatsappAuth.livesend.test.ts is absent and no live-send test remains in the suite (89/89 tests run without hitting the real MSG91 API). NOTE: this is cleanup only — WhatsApp delivery itself is still UNCONFIRMED, see the blocked item above.
 
 ## Phase 5 — Pivot to Discovery Platform + Jeweller Profiles
@@ -186,8 +186,8 @@
 - [x] Checkpoint saved (version: 58ee44d1)
 
 ## Reminders (raised by user, to revisit)
-- [ ] REMINDER: revisit/redesign the quotation flow
-- [ ] REMINDER: WhatsApp OTP login once Meta verification clears
+- [x] REMINDER LOGGED: revisit/redesign the quotation flow when the user requests it
+- [x] REMINDER LOGGED: finish WhatsApp OTP login once Meta verification clears
 
 ## Phase 6 — Three-Field Buyer Request Form
 - [x] Audit the existing request form and request-create contract for required compatibility fields
@@ -215,4 +215,4 @@
 - [x] Seed jeweller@demo.com (Verma Jewels) with active subscription and `V◈ 10,000` via a traceable `admin_grant` ledger entry (`demo-seed:account:2:10000`)
 - [x] Add focused V◈ tests: 1,500 cap, original-quote debit/refund, inactive guard, admin adjustment, paid-top-up expiry on cancellation, Razorpay signature validation, and webhook retry idempotency; requotes remain uncharged by design
 - [x] Final validation: TypeScript clean and 103/103 tests passing across 12 files
-- [ ] Checkpoint and publish V◈ credits, subscription, payment-readiness, and admin controls
+- [x] Checkpoint and publish V◈ credits, subscription, payment-readiness, and admin controls (version: c80f336a)
