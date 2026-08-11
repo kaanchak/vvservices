@@ -1,5 +1,5 @@
 import AppShell from "@/components/AppShell";
-import { CategoryBadge, StatusBadge, formatINR } from "@/components/Brand";
+import { StatusBadge, formatINR } from "@/components/Brand";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,23 +12,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useAccount } from "@/hooks/useAccount";
 import { useSocket } from "@/hooks/useSocket";
 import { proxiedImageUrl } from "@/lib/imageProxy";
 import { trpc } from "@/lib/trpc";
-import { CATEGORIES, TIMELINES, type CategorySlug } from "@shared/categories";
 import {
   AlertCircle,
   CheckCircle2,
-  Clock,
   Gem,
   ImagePlus,
   IndianRupee,
@@ -83,21 +74,12 @@ function ScrapedPreview({
   data: ScrapedProduct;
   onClear: () => void;
 }) {
-  const fields: { label: string; value?: string }[] = [
-    { label: "Description", value: data.description },
-    { label: "Price", value: data.price ? `${data.currency ?? ""}${data.price}`.trim() : undefined },
-    { label: "Metal type", value: data.metalType },
-    { label: "Gold weight", value: data.goldWeight },
-    { label: "Diamond weight", value: data.diamondWeight },
-    { label: "Stone type", value: data.stoneType },
-  ].filter(f => f.value);
-
   return (
-    <div className="rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/5 p-4">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="rounded-xl border border-[#D4AF37]/30 bg-[#D4AF37]/5 p-3">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium text-[#8a6d1c]">
           <CheckCircle2 className="h-4 w-4" />
-          Product details extracted
+          Reference captured
         </div>
         <button
           type="button"
@@ -109,41 +91,26 @@ function ScrapedPreview({
         </button>
       </div>
 
-      <div className="flex gap-4">
+      <div className="mt-2 flex items-center gap-3">
         {(data.imageUrl || data.imageBase64) && (
           <img
             src={data.imageBase64
               ? `data:${data.imageMimeType ?? 'image/jpeg'};base64,${data.imageBase64}`
               : proxiedImageUrl(data.imageUrl!)}
             alt="Extracted product"
-            className="h-24 w-24 flex-shrink-0 rounded-lg object-cover"
+            className="h-12 w-12 flex-shrink-0 rounded-lg object-cover"
             onError={e => {
               (e.target as HTMLImageElement).style.display = "none";
             }}
           />
         )}
-        <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="min-w-0 flex-1">
           {data.title && (
-            <p className="line-clamp-2 text-sm font-semibold text-[#1A1A1A]">{data.title}</p>
+            <p className="line-clamp-1 text-xs font-medium text-[#1A1A1A]">{data.title}</p>
           )}
-          {fields.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {fields.map(f => (
-                <Badge
-                  key={f.label}
-                  variant="outline"
-                  className="border-[#D4AF37]/40 bg-white text-xs text-neutral-700"
-                >
-                  <span className="font-medium text-[#8a6d1c]">{f.label}:</span>&nbsp;
-                  {f.value}
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-neutral-500">
-              Image extracted. No additional product details found on this page.
-            </p>
-          )}
+          <p className="text-xs text-neutral-500">
+            We will use this URL and its photos as your product reference.
+          </p>
         </div>
       </div>
     </div>
@@ -155,17 +122,13 @@ function ScrapedPreview({
 function NewRequestDialog() {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState<CategorySlug | "">("");
   const [imageMode, setImageMode] = useState<"upload" | "url">("upload");
   const [imageUrl, setImageUrl] = useState("");
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const [imageMimeType, setImageMimeType] = useState<string | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [budgetMin, setBudgetMin] = useState("");
-  const [budgetMax, setBudgetMax] = useState("");
-  const [timeline, setTimeline] = useState("");
-  const [notes, setNotes] = useState("");
+  const [uploadedImages, setUploadedImages] = useState<
+    { base64: string; mimeType: string; preview: string }[]
+  >([]);
+  const [approximateBudget, setApproximateBudget] = useState("");
+  const [specifications, setSpecifications] = useState("");
   const [scraped, setScraped] = useState<ScrapedProduct | null>(null);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -180,8 +143,6 @@ function NewRequestDialog() {
       } else {
         setScraped(data as ScrapedProduct);
         setScrapeError(null);
-        // Auto-fill title if empty
-        if (!title && data.title) setTitle(data.title.slice(0, 191));
       }
     },
     onError: e => {
@@ -201,33 +162,40 @@ function NewRequestDialog() {
   });
 
   function resetForm() {
-    setTitle("");
-    setCategory("");
     setImageUrl("");
-    setImageBase64(null);
-    setImagePreview(null);
-    setImageMimeType(null);
-    setBudgetMin("");
-    setBudgetMax("");
-    setTimeline("");
-    setNotes("");
+    setUploadedImages([]);
+    setApproximateBudget("");
+    setSpecifications("");
     setScraped(null);
     setScrapeError(null);
     if (scrapeTimerRef.current) clearTimeout(scrapeTimerRef.current);
   }
 
-  const handleFile = (file: File) => {
-    if (file.size > 5 * 1024 * 1024) {
-      return toast.error("Image must be under 5 MB");
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      setImageBase64(dataUrl.split(",")[1]);
-      setImageMimeType(file.type);
-      setImagePreview(dataUrl);
-    };
-    reader.readAsDataURL(file);
+  const handleFiles = (files: FileList | null) => {
+    if (!files?.length) return;
+    const available = 5 - uploadedImages.length;
+    if (available <= 0) return toast.error("You can add up to 5 reference photos");
+    const selected = Array.from(files).slice(0, available);
+    if (files.length > available) toast.message(`Only the first ${available} additional photos were added`);
+    selected.forEach(file => {
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error(`${file.name} is over 5 MB and was skipped`);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        setUploadedImages(previous => [
+          ...previous,
+          {
+            base64: dataUrl.split(",")[1],
+            mimeType: file.type || "image/jpeg",
+            preview: dataUrl,
+          },
+        ].slice(0, 5));
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   // Debounced scrape on URL input change
@@ -252,14 +220,14 @@ function NewRequestDialog() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!category) return toast.error("Please select a category");
-    if (!imageBase64 && !imageUrl) {
-      return toast.error("Please upload an image or paste an image URL");
+    const hasUploadedImages = uploadedImages.length > 0;
+    const hasUrl = imageUrl.trim().length > 0;
+    if (!hasUploadedImages && !hasUrl) {
+      return toast.error("Add a product URL or at least one reference photo");
     }
-    const min = budgetMin ? parseInt(budgetMin) : undefined;
-    const max = budgetMax ? parseInt(budgetMax) : undefined;
-    if (min && max && min > max) {
-      return toast.error("Minimum budget cannot exceed maximum");
+    const budget = Number(approximateBudget.replace(/[^\d]/g, ""));
+    if (!budget || budget < 1) {
+      return toast.error("Add an approximate budget in rupees");
     }
     // Use scraped image if available and no upload.
     // If the server returned imageBase64 (storagePut failed server-side), use that
@@ -271,23 +239,24 @@ function NewRequestDialog() {
         : undefined;
 
     create.mutate({
-      title,
-      category,
       imageUrl: finalImageUrl,
       imageUrls:
         imageMode === "url" && scraped?.imageUrls && scraped.imageUrls.length > 0
           ? scraped.imageUrls.slice(0, 5)
           : undefined,
-      imageBase64: scrapedHasBase64
-        ? scraped!.imageBase64
-        : (imageMode === "upload" && imageBase64 ? imageBase64 : undefined),
-      imageMimeType: scrapedHasBase64
-        ? (scraped!.imageMimeType ?? "image/jpeg")
-        : (imageMimeType ?? undefined),
-      budgetMin: min,
-      budgetMax: max,
-      timeline: timeline || undefined,
-      notes: notes || undefined,
+      imageBase64s:
+        imageMode === "upload" && !scrapedHasBase64
+          ? uploadedImages.map(image => image.base64)
+          : undefined,
+      imageMimeTypes:
+        imageMode === "upload" && !scrapedHasBase64
+          ? uploadedImages.map(image => image.mimeType)
+          : undefined,
+      imageBase64: scrapedHasBase64 ? scraped!.imageBase64 : undefined,
+      imageMimeType: scrapedHasBase64 ? (scraped!.imageMimeType ?? "image/jpeg") : undefined,
+      budgetMin: budget,
+      budgetMax: budget,
+      notes: specifications.trim() || undefined,
       scrapedDetails: scraped ? JSON.stringify(scraped) : undefined,
     });
   };
@@ -308,39 +277,12 @@ function NewRequestDialog() {
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={handleSubmit}>
-          {/* Title */}
+          {/* 1. Product reference */}
           <div className="space-y-2">
-            <Label htmlFor="title">What do you want made?</Label>
-            <Input
-              id="title"
-              required
-              maxLength={191}
-              placeholder="e.g. 22K gold bridal necklace set"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-            />
-          </div>
-
-          {/* Category */}
-          <div className="space-y-2">
-            <Label>Category</Label>
-            <Select value={category} onValueChange={v => setCategory(v as CategorySlug)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a category" />
-              </SelectTrigger>
-              <SelectContent>
-                {CATEGORIES.map(c => (
-                  <SelectItem key={c.slug} value={c.slug}>
-                    {c.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Image */}
-          <div className="space-y-2">
-            <Label>Reference image</Label>
+            <Label>1. Product reference</Label>
+            <p className="text-xs text-neutral-500">
+              Paste a product URL or add up to 5 photos. We will extract the details we can.
+            </p>
             <div className="flex gap-2">
               <Button
                 type="button"
@@ -348,7 +290,7 @@ function NewRequestDialog() {
                 variant={imageMode === "upload" ? "default" : "outline"}
                 onClick={() => { setImageMode("upload"); setScraped(null); setScrapeError(null); }}
               >
-                <Upload className="h-3.5 w-3.5" /> Upload
+                <Upload className="h-3.5 w-3.5" /> Add photos
               </Button>
               <Button
                 type="button"
@@ -362,30 +304,49 @@ function NewRequestDialog() {
 
             {imageMode === "upload" ? (
               <div
-                className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-[#D4AF37]/40 bg-[#D4AF37]/5 p-6 text-center transition-colors hover:bg-[#D4AF37]/10"
+                className="cursor-pointer rounded-lg border-2 border-dashed border-[#D4AF37]/40 bg-[#D4AF37]/5 p-4 text-center transition-colors hover:bg-[#D4AF37]/10"
                 onClick={() => fileRef.current?.click()}
               >
-                {imagePreview ? (
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="max-h-40 rounded-md object-contain"
-                  />
+                {uploadedImages.length > 0 ? (
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                    {uploadedImages.map((image, index) => (
+                      <div key={`${image.preview}-${index}`} className="group relative aspect-square overflow-hidden rounded-md bg-white">
+                        <img src={image.preview} alt={`Reference ${index + 1}`} className="h-full w-full object-cover" />
+                        <button
+                          type="button"
+                          aria-label={`Remove reference photo ${index + 1}`}
+                          onClick={event => {
+                            event.stopPropagation();
+                            setUploadedImages(previous => previous.filter((_, i) => i !== index));
+                          }}
+                          className="absolute right-1 top-1 rounded-full bg-black/65 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                    {uploadedImages.length < 5 && (
+                      <div className="flex aspect-square items-center justify-center rounded-md border border-dashed border-[#D4AF37]/50 text-[#8a6d1c]">
+                        <Plus className="h-5 w-5" />
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <>
                     <ImagePlus className="mb-2 h-8 w-8 text-[#D4AF37]" strokeWidth={1.5} />
-                    <p className="text-sm text-neutral-600">Click to upload a jewellery photo</p>
-                    <p className="text-xs text-neutral-400">JPG or PNG, up to 5 MB</p>
+                    <p className="text-sm text-neutral-600">Click to add jewellery photos</p>
+                    <p className="text-xs text-neutral-400">Up to 5 JPG, PNG or WEBP images, 5 MB each</p>
                   </>
                 )}
                 <input
                   ref={fileRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
                   onChange={e => {
-                    const f = e.target.files?.[0];
-                    if (f) handleFile(f);
+                    handleFiles(e.target.files);
+                    e.target.value = "";
                   }}
                 />
               </div>
@@ -418,7 +379,7 @@ function NewRequestDialog() {
                     <div className="space-y-1">
                       <p className="font-medium">Auto-extraction not available</p>
                       <p>{scrapeError}</p>
-                      <p className="text-amber-700">You can still submit your request — add any details you know in the notes field below.</p>
+                      <p className="text-amber-700">You can still submit — add any details you know in the specifications field below.</p>
                     </div>
                   </div>
                 )}
@@ -433,59 +394,31 @@ function NewRequestDialog() {
             )}
           </div>
 
-          {/* Budget */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="budgetMin">Budget min (₹)</Label>
-              <Input
-                id="budgetMin"
-                type="number"
-                min={0}
-                placeholder="50,000"
-                value={budgetMin}
-                onChange={e => setBudgetMin(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="budgetMax">Budget max (₹)</Label>
-              <Input
-                id="budgetMax"
-                type="number"
-                min={0}
-                placeholder="1,00,000"
-                value={budgetMax}
-                onChange={e => setBudgetMax(e.target.value)}
-              />
-            </div>
+          {/* 2. Budget */}
+          <div className="space-y-2">
+            <Label htmlFor="approximateBudget">2. Approximate budget (₹)</Label>
+            <Input
+              id="approximateBudget"
+              type="text"
+              inputMode="numeric"
+              required
+              placeholder="e.g. 75,000"
+              value={approximateBudget}
+              onChange={e => setApproximateBudget(e.target.value)}
+            />
+            <p className="text-xs text-neutral-500">An estimate is enough — it helps jewellers quote realistically.</p>
           </div>
 
-          {/* Timeline */}
+          {/* 3. Specifications */}
           <div className="space-y-2">
-            <Label>Timeline</Label>
-            <Select value={timeline} onValueChange={setTimeline}>
-              <SelectTrigger>
-                <SelectValue placeholder="When do you need it?" />
-              </SelectTrigger>
-              <SelectContent>
-                {TIMELINES.map(t => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Notes */}
-          <div className="space-y-2">
-            <Label htmlFor="notes">Notes for jewellers</Label>
+            <Label htmlFor="specifications">3. Specifications <span className="font-normal text-neutral-400">(optional)</span></Label>
             <Textarea
-              id="notes"
+              id="specifications"
               rows={3}
               maxLength={2000}
-              placeholder="Weight, purity, size, stone preferences…"
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. 18KT yellow gold, lab-grown diamond, ring size 12, around 5g"
+              value={specifications}
+              onChange={e => setSpecifications(e.target.value)}
             />
           </div>
 
@@ -605,9 +538,6 @@ export default function BuyerDashboard() {
                       </div>
                     </div>
                   )}
-                  <div className="absolute left-3 top-3">
-                    <CategoryBadge category={r.category} />
-                  </div>
                   {scraped && (
                     <div className="absolute right-3 top-3">
                       <Badge className="border-0 bg-black/60 text-[10px] text-white backdrop-blur-sm">
@@ -650,15 +580,11 @@ export default function BuyerDashboard() {
                     <p className="flex items-center gap-2">
                       <IndianRupee className="h-3.5 w-3.5 text-[#D4AF37]" />
                       {r.budgetMin || r.budgetMax
-                        ? `${formatINR(r.budgetMin)} – ${formatINR(r.budgetMax)}`
+                        ? r.budgetMin && r.budgetMax && r.budgetMin === r.budgetMax
+                          ? `Approx. ${formatINR(r.budgetMax)}`
+                          : `Approx. ${formatINR(r.budgetMin)} – ${formatINR(r.budgetMax)}`
                         : "Budget flexible"}
                     </p>
-                    {r.timeline && (
-                      <p className="flex items-center gap-2">
-                        <Clock className="h-3.5 w-3.5 text-[#D4AF37]" />
-                        {r.timeline}
-                      </p>
-                    )}
                   </div>
                   <div className="mt-4 border-t border-border pt-3 text-sm font-medium text-[#8a6d1c]">
                     {r.quoteCount === 0

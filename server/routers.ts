@@ -29,6 +29,51 @@ import { sendWhatsappOtp, verifyWhatsappOtp, normalizeWhatsappNumber } from "./w
 
 const categoryEnum = z.enum(CATEGORY_SLUGS);
 
+type RequestCategory = "gold" | "diamond-gold" | "stone-studded";
+
+/**
+ * Infer lead routing from the buyer's short specification or scraped product
+ * text. The buyer no longer has to understand our internal category labels.
+ * Returning null deliberately widens routing to all jewellers rather than
+ * guessing and silently hiding a lead from the right specialists.
+ */
+export function inferRequestCategory(text: string): RequestCategory | null {
+  const value = text.toLowerCase();
+  if (
+    /\b(diamond|solitaire|engagement|lab[ -]?grown|natural diamond|moissanite)\b/.test(
+      value
+    )
+  ) {
+    return "diamond-gold";
+  }
+  if (
+    /\b(stone|gemstone|ruby|sapphire|emerald|pearl|polki|kundan|meenakari)\b/.test(value)
+  ) {
+    return "stone-studded";
+  }
+  if (/\b(gold|9k|9kt|14k|14kt|18k|18kt|22k|22kt|24k|24kt)\b/.test(value)) {
+    return "gold";
+  }
+  return null;
+}
+
+function readScrapedProductText(scrapedDetails?: string) {
+  if (!scrapedDetails) return "";
+  try {
+    const scraped = JSON.parse(scrapedDetails) as {
+      title?: string;
+      description?: string;
+      metalType?: string;
+      stoneType?: string;
+    };
+    return [scraped.title, scraped.description, scraped.metalType, scraped.stoneType]
+      .filter(Boolean)
+      .join(" ");
+  } catch {
+    return "";
+  }
+}
+
 // --- VVServices account-auth middleware -----------------------------------
 
 const accountProcedure = publicProcedure.use(async ({ ctx, next }) => {
@@ -258,10 +303,16 @@ export const appRouter = router({
     create: buyerProcedure
       .input(
         z.object({
-          title: z.string().min(1).max(191),
-          category: categoryEnum,
+          // Title and category remain supported for old clients, but the short
+          // buyer form intentionally no longer asks for either.
+          title: z.string().min(1).max(191).optional(),
+          category: categoryEnum.optional(),
           imageUrl: z.string().max(2000).optional(),
           imageUrls: z.array(z.string().max(2000)).max(5).optional(),
+          /** New short-form uploader: up to five local reference photos. */
+          imageBase64s: z.array(z.string().max(8_000_000)).max(5).optional(),
+          imageMimeTypes: z.array(z.string().max(100)).max(5).optional(),
+          /** Legacy single-image fields retained for compatibility with old clients. */
           imageBase64: z.string().max(8_000_000).optional(),
           imageMimeType: z.string().max(100).optional(),
           budgetMin: z.number().int().min(0).optional(),
@@ -272,8 +323,28 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        const scrapedText = readScrapedProductText(input.scrapedDetails);
+        const inferredCategory = input.category ?? inferRequestCategory(
+          [input.title, input.notes, scrapedText].filter(Boolean).join(" ")
+        );
+        const category = inferredCategory ?? "gold";
+        const autoRouteAll = !input.category && !inferredCategory;
+        const title =
+          input.title?.trim() ||
+          scrapedText.split("\n")[0]?.trim().slice(0, 191) ||
+          (input.notes?.trim()
+            ? `Custom jewellery request — ${input.notes.trim().slice(0, 150)}`
+            : "Custom jewellery request");
         let imageUrl = input.imageUrl;
         let imageUrls: string[] = input.imageUrls ?? [];
+        const localUploads = input.imageBase64s?.length
+          ? input.imageBase64s.map((base64, index) => ({
+              base64,
+              mimeType: input.imageMimeTypes?.[index] ?? "image/jpeg",
+            }))
+          : input.imageBase64
+            ? [{ base64: input.imageBase64, mimeType: input.imageMimeType ?? "image/jpeg" }]
+            : [];
         // Detect whether the submitted imageUrl is actually a product PAGE url
         // (buyer hit submit before the frontend scrape finished). In that case we
         // create the request immediately and scrape in the background.
@@ -283,22 +354,28 @@ export const appRouter = router({
           return !/\.(jpe?g|png|webp|gif|avif|bmp|svg)$/.test(path) && !path.includes("/manus-storage/");
         };
         const needsBackgroundScrape =
-          !input.imageBase64 &&
+          localUploads.length === 0 &&
           !!imageUrl &&
           imageUrls.length === 0 &&
           !input.scrapedDetails &&
           looksLikePageUrl(imageUrl);
 
-        if (input.imageBase64) {
-          const buffer = Buffer.from(input.imageBase64, "base64");
-          const ext = (input.imageMimeType || "image/jpeg").split("/")[1] || "jpg";
-          const { url } = await storagePut(
-            `requests/${ctx.account.accountId}-${Date.now()}.${ext}`,
-            buffer,
-            input.imageMimeType || "image/jpeg"
+        if (localUploads.length > 0) {
+          const timestamp = Date.now();
+          const uploadedUrls = await Promise.all(
+            localUploads.map(async ({ base64, mimeType }, index) => {
+              const buffer = Buffer.from(base64, "base64");
+              const ext = mimeType.split("/")[1] || "jpg";
+              const { url } = await storagePut(
+                `requests/${ctx.account.accountId}-${timestamp}-${index}.${ext}`,
+                buffer,
+                mimeType
+              );
+              return url;
+            })
           );
-          imageUrl = url;
-          if (imageUrls.length === 0) imageUrls = [url];
+          imageUrl = uploadedUrls[0];
+          imageUrls = uploadedUrls;
         } else if (!needsBackgroundScrape && imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
           console.log("[requests.create] Re-hosting external image:", imageUrl.slice(0, 80));
           try {
@@ -352,8 +429,9 @@ export const appRouter = router({
 
         const id = await db.createRequest({
           buyerId: ctx.account.accountId,
-          title: input.title,
-          category: input.category,
+          title: title.slice(0, 191),
+          category,
+          autoRouteAll,
           imageUrl,
           imageUrls: imageUrls.length > 0 ? JSON.stringify(imageUrls) : undefined,
           originalPrice,
@@ -410,10 +488,15 @@ export const appRouter = router({
 
         const request = await db.getRequestById(id);
         const buyer = await db.getAccountById(ctx.account.accountId);
-        emitNewRequest(input.category, {
+        const requestPayload = {
           ...request,
           buyerName: buyer?.name ?? "Buyer",
-        });
+        };
+        if (autoRouteAll) {
+          CATEGORY_SLUGS.forEach(targetCategory => emitNewRequest(targetCategory, requestPayload));
+        } else {
+          emitNewRequest(category, requestPayload);
+        }
         return request!;
       }),
 

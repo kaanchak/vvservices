@@ -188,3 +188,16 @@
 ## Reminders (raised by user, to revisit)
 - [ ] REMINDER: revisit/redesign the quotation flow
 - [ ] REMINDER: WhatsApp OTP login once Meta verification clears
+
+## Phase 6 — Three-Field Buyer Request Form
+- [x] Audit the existing request form and request-create contract for required compatibility fields
+- [x] Audit the existing request form and request-create contract for required compatibility fields
+- [x] Add `requests.autoRouteAll` flag with migration 0008_tired_ghost_rider.sql; category now infers from scraped details/specifications (gold, diamond-gold, stone-studded), with unknown requests deliberately routed to all jeweller categories
+- [x] Keep legacy title/category/timeline inputs accepted server-side for old clients while deriving a safe title and category when the streamlined form omits them
+- [x] Extend requests.create to store up to five locally uploaded reference photos in parallel
+- [x] Reduce submission to product reference (URL or up to 5 photos), one required approximate budget, and optional specifications
+- [x] Remove buyer-facing title, category, budget-range and timeline controls; collapse extraction output to a compact reference confirmation and update validation/copy
+- [x] Preserve URL scraping, up-to-five-photo persistence, real-time lead routing, and jeweller quote compatibility; buyer cards now hide the internal category and show one approximate budget
+- [x] Add server/shortRequestRouting.test.ts — 8 tests for 14KT/18KT, natural/lab-grown diamond, stone inference, no-guess routing, tRPC short-form compatibility, and all-category lead visibility
+- [x] 97/97 tests passing across 10 files; TypeScript clean; test teardown confirmed no profile or short-form test accounts remain in live data
+- [ ] Checkpoint and publish simplified request form

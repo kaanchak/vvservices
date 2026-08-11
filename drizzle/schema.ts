@@ -115,6 +115,11 @@ export const requests = mysqlTable("requests", {
   id: int("id").autoincrement().primaryKey(),
   buyerId: int("buyerId").notNull(),
   category: mysqlEnum("category", ["gold", "diamond-gold", "stone-studded"]).notNull(),
+  /**
+   * True when no category can be inferred from the buyer's reference/specification.
+   * These requests are sent to all jeweller categories instead of being silently lost.
+   */
+  autoRouteAll: boolean("autoRouteAll").default(false).notNull(),
   /** Uploaded image URL (S3) or pasted external URL */
   imageUrl: text("imageUrl"),
   title: varchar("title", { length: 191 }).notNull(),

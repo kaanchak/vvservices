@@ -1,0 +1,1 @@
+ALTER TABLE `requests` ADD `autoRouteAll` boolean DEFAULT false NOT NULL;

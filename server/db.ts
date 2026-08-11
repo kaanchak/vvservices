@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   accounts,
@@ -172,6 +172,13 @@ export async function getRequestById(id: number) {
   return rows[0];
 }
 
+/** Hard-delete a request. Used by isolated test teardown; never exposed to the API. */
+export async function deleteRequestById(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(requests).where(eq(requests.id, id));
+}
+
 export async function getRequestsByBuyer(buyerId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -182,8 +189,13 @@ export async function getRequestsByBuyer(buyerId: number) {
     .orderBy(desc(requests.createdAt));
 }
 
-/** Leads for a jeweller filtered by their categories, newest first.
- *  Only returns requests with status 'open' or 'quoted' (not paused/closed). */
+/**
+ * Leads for a jeweller, newest first.
+ *
+ * Standard requests go only to their matching category. When the short buyer
+ * form cannot infer a category, `autoRouteAll` deliberately broadens matching
+ * so an otherwise valid request never disappears from every jeweller feed.
+ */
 export async function getOpenRequestsByCategories(
   categories: ("gold" | "diamond-gold" | "stone-studded")[]
 ) {
@@ -195,12 +207,12 @@ export async function getOpenRequestsByCategories(
       buyerName: accounts.name,
     })
     .from(requests)
-    .leftJoin(accounts, eq(requests.buyerId, accounts.id))
-    .where(
-      and(
-        inArray(requests.category, categories),
-        inArray(requests.status, ["open", "quoted"])
-      )
+      .leftJoin(accounts, eq(requests.buyerId, accounts.id))
+      .where(
+        and(
+          or(inArray(requests.category, categories), eq(requests.autoRouteAll, true)),
+          inArray(requests.status, ["open", "quoted"])
+        )
     )
     .orderBy(desc(requests.createdAt));
 }
